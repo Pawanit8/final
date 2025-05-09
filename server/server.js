@@ -8,6 +8,8 @@ import { createServer } from "http";
 import { Server } from "socket.io";
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { cleanupOldData } from "./utils/cleanup.js";
+import cron from 'node-cron';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -18,7 +20,7 @@ const server = createServer(app);
 // Setup Socket.io with CORS
 const io = new Server(server, {
   cors: {
-    origin: ["https://college-bus-tracking.vercel.app", "http://localhost:3000"],
+    origin: ["https://college-bus-tracking.vercel.app","http://localhost:3000"],
     methods: ["GET", "POST"],
     credentials: true,
   },
@@ -35,7 +37,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // CORS configuration
 const corsOptions = {
-  origin: ["https://college-bus-tracking.vercel.app", "http://localhost:3000"],
+  origin: ["https://college-bus-tracking.vercel.app","http://localhost:3000"],
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"]
@@ -66,6 +68,15 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
   });
+});
+
+// Schedule daily cleanup at 12:00 AM
+const cleanupSchedule = '0 0 * * *'; // Every day at midnight
+
+cron.schedule(cleanupSchedule, async () => {
+  console.log('Starting daily cleanup...');
+  await cleanupOldData();
+  console.log('Daily cleanup completed');
 });
 
 // Start the server

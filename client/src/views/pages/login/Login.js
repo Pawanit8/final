@@ -37,6 +37,7 @@ const LoginPage = () => {
         localStorage.setItem("token", response.data.token);
         localStorage.setItem("user", JSON.stringify(response.data.user));
         localStorage.setItem("role", role);
+        localStorage.setItem("userId", response.data.user._id)
 
         alert("Login successful!");
 

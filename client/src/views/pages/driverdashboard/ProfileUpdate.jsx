@@ -116,7 +116,7 @@ const ProfileUpdates = () => {
       });
       setSuccess('Profile updated successfully!');
       setTimeout(() => {
-        if (data.user.role === 'driver') {
+        if (data.user.role === 'Driver') {
           navigate('/driver-dashboard');
         } else if (data.user.role === 'Admin') {
           navigate('/dashboard');

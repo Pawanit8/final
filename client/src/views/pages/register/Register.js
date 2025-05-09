@@ -145,9 +145,8 @@ const Register = () => {
                 Already have an account? <Link to="/" className="text-primary">Sign in</Link>
               </small>
               <br />
-              <small className="text-body-secondary">
-                This is a demo app. Account creation is simulated.
-              </small>
+              
+              
             </div>
           </CForm>
         </CCardBody>

@@ -23,6 +23,10 @@ Router.post("/auth/register", UserController.register);
 Router.post("/auth/login", UserController.login);
 Router.post("/auth/logout",UserController.logout);
 Router.get("/auth/users", authorizeAdmin, UserController.getAllUserData);
+Router.post('/subscribe',UserController.subscribe);
+Router.post('/unsubscribe',UserController.unsubscribe);
+Router.post('/send/:userId',UserController.sendById);
+Router.post('/buses/:busId/delay-notification',UserController.delayNotification);
 
 
 // Router.put('/auth/update-profilepic', authenticateUser, upload.single('profilePicture'), UserController.updateProfilePic);
@@ -55,13 +59,15 @@ Router.get("/getNotAssignedBus",authenticateUser,busController.getNotAssignedBus
 
 Router.post("/buses/report-delay", authenticateUser, busController.reportDelay);
 Router.get("/buses/delays", authenticateUser, busController.getDelayedBuses);
+Router.post("/buses/delay/resolve",authenticateUser,busController.resolveDelay)
+
 //report delay
 //resolve delay
 // Router.get("/buses/delays/reason-based", authenticateUser, busController.getDelayedBuses);
 
 
 // ========== Bus Tracking Routes ==========
-Router.post("/buses/location", authorizeDriver,busTrackingController.updateBusLocation);
+Router.post("/buses/location",authenticateUser ,authorizeDriver,busTrackingController.updateBusLocation);
 Router.get("/buses/nearby", busTrackingController.getBusesNearLocation);
 Router.get("/buses/:busId/tracking/history", authenticateUser, busTrackingController.getBusHistory);
 Router.get("/buses/:busId/tracking/current", busTrackingController.getCurrentLocation);

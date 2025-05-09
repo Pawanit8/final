@@ -1,8 +1,10 @@
-import React, { Suspense, useEffect } from 'react'
-import { Form, HashRouter, Route, Routes } from 'react-router-dom'
+import React, { Suspense, useEffect, useState } from 'react'
+import { HashRouter, Route, Routes } from 'react-router-dom'
 import { useSelector } from 'react-redux'
+import axios from 'axios'
+import { toast } from 'react-toastify'
 
-import { CSpinner, useColorModes } from '@coreui/react'
+import { CSpinner, useColorModes, CButton } from '@coreui/react'
 import './scss/style.scss'
 
 // We use those styles to show code examples, you should remove them in your application.
@@ -28,11 +30,59 @@ const UserForm = React.lazy(() => import('./UserPages/UserForm'))
 const Register = React.lazy(() => import('./views/pages/register/Register'))
 const Page404 = React.lazy(() => import('./views/pages/page404/Page404'))
 const Page500 = React.lazy(() => import('./views/pages/page500/Page500'))
-// const DriverLocation = React.lazy(() => import('./views/pages/driverdashboard/DriverLocation'))
+
+// Helper function to convert VAPID key
+const urlBase64ToUint8Array = (base64String) => {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const rawData = window.atob(base64)
+  const outputArray = new Uint8Array(rawData.length)
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i)
+  }
+  return outputArray
+}
 
 const App = () => {
   const { isColorModeSet, setColorMode } = useColorModes('coreui-free-react-admin-template-theme')
   const storedTheme = useSelector((state) => state.theme)
+  
+  // Push notification states
+  const [isPushSupported, setIsPushSupported] = useState(false)
+  const [pushEnabled, setPushEnabled] = useState(false)
+
+  // Register push notifications
+  const registerPushNotifications = async () => {
+    try {
+      // Register service worker
+      const registration = await navigator.serviceWorker.register('/sw.js')
+      
+      // Request notification permission
+      const permission = await Notification.requestPermission()
+      if (permission !== 'granted') {
+        throw new Error('Permission not granted')
+      }
+      
+      // Subscribe to push notifications
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(process.env.REACT_APP_VAPID_PUBLIC_KEY)
+      })
+      
+      // Send subscription to server
+      const userId = localStorage.getItem('userId') // Or get from your auth system
+      await axios.post('/api/subscribe', { 
+        subscription, 
+        userId 
+      })
+      
+      setPushEnabled(true)
+      toast.success('Push notifications enabled')
+    } catch (error) {
+      console.error('Push registration failed:', error)
+      toast.error('Failed to enable push notifications')
+    }
+  }
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.href.split('?')[1])
@@ -46,6 +96,22 @@ const App = () => {
     }
 
     setColorMode(storedTheme)
+
+    // Check for push notification support
+    const pushSupported = 'Notification' in window && 'serviceWorker' in navigator
+    setIsPushSupported(pushSupported)
+
+    if (pushSupported) {
+      // Check if already subscribed
+      navigator.serviceWorker.ready.then(registration => {
+        registration.pushManager.getSubscription()
+          .then(subscription => {
+            if (subscription) {
+              setPushEnabled(true)
+            }
+          })
+      })
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -57,6 +123,19 @@ const App = () => {
           </div>
         }
       >
+        {/* Notification Enable Button - You can place this wherever appropriate in your UI */}
+        {isPushSupported && (
+          <div style={{ position: 'fixed', bottom: '20px', right: '20px', zIndex: 1000 }}>
+            <CButton 
+              color={pushEnabled ? "success" : "secondary"} 
+              onClick={registerPushNotifications}
+              disabled={pushEnabled}
+            >
+              {pushEnabled ? 'Notifications Enabled' : 'Enable Notifications'}
+            </CButton>
+          </div>
+        )}
+        
         <Routes>
           <Route exact path="/" name="Login Page" element={<Login />} />
           <Route exact path="/register" name="Register Page" element={<Register />} />
@@ -73,8 +152,6 @@ const App = () => {
           <Route exact path="/update-profiles" name="ProfileUpdates" element={<ProfileUpdates />} />
           <Route exact path="/delayed-buses" name="DelayedBuses" element={<DelayedBuses />} />
           <Route exact path="/buses/:id" name="BusTracking" element={<BusTracking />} />
-
-
           <Route path="*" name="Home" element={<DefaultLayout />} />
         </Routes>
       </Suspense>

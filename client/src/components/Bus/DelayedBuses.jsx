@@ -49,7 +49,7 @@ const DelayedBuses = () => {
     const token = localStorage.getItem("token");
     if (!token) {
       alert("Unauthorized: Please log in.");
-      navigate("/login");
+      navigate("/");
       return;
     }
 

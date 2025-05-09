@@ -43,6 +43,7 @@ import {
   cilArrowCircleTop,
   cilReload,
   cilMap,
+  cilBell
 } from '@coreui/icons';
 import CIcon from "@coreui/icons-react";
 import Navbar from "./Navbar";
@@ -52,35 +53,6 @@ import "react-toastify/dist/ReactToastify.css";
 
 const API_URL = import.meta.env.VITE_API_URL;
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
-
-// Helper functions
-function getNextStop(stops) {
-  return stops?.find(stop => stop.actualArrivalTime === null);
-}
-
-function convertTimeToMinutes(timeString) {
-  if (!timeString) return 0;
-  const [hours, minutes] = timeString.split(':').map(Number);
-  return hours * 60 + minutes;
-}
-
-function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371; // Earth radius in km
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = 
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-    Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  return R * c;
-}
-
-function formatTime(minutes) {
-  const hrs = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  return `${hrs > 0 ? `${hrs}h ` : ''}${mins}m`;
-}
 
 const DriverDashboard = () => {
   // State management
@@ -102,6 +74,7 @@ const DriverDashboard = () => {
   const [showDelayModal, setShowDelayModal] = useState(false);
   const [delayReason, setDelayReason] = useState("");
   const [delayDuration, setDelayDuration] = useState(10);
+  const [delayNotes, setDelayNotes] = useState("");
   const [isReportingDelay, setIsReportingDelay] = useState(false);
   const [locationHistory, setLocationHistory] = useState([]);
   const [delayedBuses, setDelayedBuses] = useState([]);
@@ -115,6 +88,8 @@ const DriverDashboard = () => {
   const [fuelStations, setFuelStations] = useState([]);
   const [showFuelStations, setShowFuelStations] = useState(false);
   const [isLoadingFuelStations, setIsLoadingFuelStations] = useState(false);
+  const [isPushSupported, setIsPushSupported] = useState(false);
+  const [pushEnabled, setPushEnabled] = useState(false);
 
   // Refs
   const mapContainerRef = useRef(null);
@@ -124,91 +99,41 @@ const DriverDashboard = () => {
   const pauseTimeoutRef = useRef(null);
   const stopsListRef = useRef(null);
 
-  // Calculate delay information
-  const delayInfo = calculateBusDelay();
+  // Helper functions
+  const getNextStop = (stops) => stops?.find(stop => stop.actualArrivalTime === null);
 
-  // Calculate ETAs for all stops
-  const calculateETAs = () => {
-    if (!location || !routePoints || routePoints.length === 0) return {};
-  
-    const currentTime = new Date();
-    const etas = {};
-    let cumulativeTime = 0;
-    
-    for (let i = nextStopIndex; i < routePoints.length; i++) {
-      const prevPoint = i === nextStopIndex ? 
-        { latitude: location.latitude, longitude: location.longitude } : 
-        routePoints[i - 1];
-      
-      const distance = calculateDistance(
-        prevPoint.latitude,
-        prevPoint.longitude,
-        routePoints[i].latitude,
-        routePoints[i].longitude
-      );
-      
-      const avgSpeed = speed > 0 ? speed : 30; // Default to 30 km/h if speed is 0
-      const timeInHours = distance / avgSpeed;
-      cumulativeTime += timeInHours * 60;
-      
-      etas[i] = {
-        minutes: Math.round(cumulativeTime),
-        arrivalTime: new Date(currentTime.getTime() + cumulativeTime * 60000),
-        distance: distance.toFixed(2)
-      };
-    }
-  
-    return etas;
+  const convertTimeToMinutes = (timeString) => {
+    if (!timeString) return 0;
+    const [hours, minutes] = timeString.split(':').map(Number);
+    return hours * 60 + minutes;
   };
 
-  // Calculate route progress percentage
-  const calculateRouteProgress = () => {
-    if (!location || routePoints.length === 0) return 0;
-    
-    let totalDistance = 0;
-    let traveledDistance = 0;
-    
-    // Calculate total route distance
-    for (let i = 1; i < routePoints.length; i++) {
-      totalDistance += calculateDistance(
-        routePoints[i-1].latitude,
-        routePoints[i-1].longitude,
-        routePoints[i].latitude,
-        routePoints[i].longitude
-      );
-    }
-    
-    // Calculate distance traveled so far
-    for (let i = 1; i <= currentStopIndex; i++) {
-      traveledDistance += calculateDistance(
-        routePoints[i-1].latitude,
-        routePoints[i-1].longitude,
-        routePoints[i].latitude,
-        routePoints[i].longitude
-      );
-    }
-    
-    // Add distance from last stop to current location
-    if (currentStopIndex < routePoints.length - 1) {
-      traveledDistance += calculateDistance(
-        routePoints[currentStopIndex].latitude,
-        routePoints[currentStopIndex].longitude,
-        location.latitude,
-        location.longitude
-      );
-    }
-    
-    return Math.min(100, Math.round((traveledDistance / totalDistance) * 100));
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; // Earth radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
   };
 
-  // Calculate bus delay status
-  function calculateBusDelay() {
+  const formatTime = (minutes) => {
+    const hrs = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hrs > 0 ? `${hrs}h ` : ''}${mins}m`;
+  };
+
+  const calculateBusDelay = () => {
     if (!busDetails?.routeId?.stops || !busDetails.currentLocation) {
       return {
         isDelayed: false,
         delayMinutes: 0,
         reason: "No data available",
-        nextStop: "Unknown"
+        nextStop: "Unknown",
+        alreadyNotified: false
       };
     }
 
@@ -218,18 +143,27 @@ const DriverDashboard = () => {
 
     // Check if bus has stopped moving
     if (busDetails.currentLocation.speed === 0 && timeSinceLastUpdate > 5) {
-      return {
+      const delayInfo = {
         isDelayed: true,
         delayMinutes: Math.round(timeSinceLastUpdate),
         reason: "Bus has stopped moving",
-        nextStop: getNextStop(busDetails.routeId.stops)?.name || "Unknown"
+        nextStop: getNextStop(busDetails.routeId.stops)?.name || "Unknown",
+        alreadyNotified: busDetails.delay?.isNotified || false
       };
+
+      // Automatically report delay if not already reported
+      if (!delayInfo.alreadyNotified) {
+        reportDelay().catch(error => {
+          console.error("Error auto-reporting delay:", error);
+        });
+      }
+
+      return delayInfo;
     }
 
     // Check each stop for delays
     for (const stop of busDetails.routeId.stops) {
       if (stop.actualArrivalTime !== null) {
-        // If we have actual arrival time, compare with scheduled
         const scheduledTime = convertTimeToMinutes(stop.time);
         const actualTime = convertTimeToMinutes(stop.actualArrivalTime);
         const delay = actualTime - scheduledTime;
@@ -239,15 +173,14 @@ const DriverDashboard = () => {
             isDelayed: true,
             delayMinutes: delay,
             reason: `Delayed at ${stop.name}`,
-            nextStop: getNextStop(busDetails.routeId.stops)?.name || "Unknown"
+            nextStop: getNextStop(busDetails.routeId.stops)?.name || "Unknown",
+            alreadyNotified: busDetails.delay?.isNotified || false
           };
         }
       } else {
-        // For upcoming stops, compare ETA with scheduled time
         const scheduledArrival = convertTimeToMinutes(stop.time);
         const currentTimeMinutes = now.getHours() * 60 + now.getMinutes();
         
-        // Get ETA for this stop
         const stopIndex = routePoints.findIndex(p => p._id === stop._id);
         const stopETA = stopETAs[stopIndex];
         
@@ -260,16 +193,17 @@ const DriverDashboard = () => {
               isDelayed: true,
               delayMinutes: delay,
               reason: `Expected delay at ${stop.name}`,
-              nextStop: stop.name
+              nextStop: stop.name,
+              alreadyNotified: busDetails.delay?.isNotified || false
             };
           }
         } else if (currentTimeMinutes > scheduledArrival) {
-          // If we don't have ETA but current time is past scheduled time
           return {
             isDelayed: true,
             delayMinutes: currentTimeMinutes - scheduledArrival,
             reason: `Expected delay at ${stop.name}`,
-            nextStop: stop.name
+            nextStop: stop.name,
+            alreadyNotified: busDetails.delay?.isNotified || false
           };
         }
         break;
@@ -280,127 +214,14 @@ const DriverDashboard = () => {
       isDelayed: false,
       delayMinutes: 0,
       reason: "On schedule",
-      nextStop: getNextStop(busDetails.routeId.stops)?.name || "Unknown"
+      nextStop: getNextStop(busDetails.routeId.stops)?.name || "Unknown",
+      alreadyNotified: false
     };
-  }
-
-  // Find nearby fuel stations
-  const findNearbyFuelStations = async () => {
-    if (!location) {
-      toast.warning("Current location not available");
-      return;
-    }
-
-    try {
-      setIsLoadingFuelStations(true);
-      setShowFuelStations(true);
-      
-      const response = await axios.get(
-        `https://api.mapbox.com/geocoding/v5/mapbox.places/fuel.json`,
-        {
-          params: {
-            proximity: `${location.longitude},${location.latitude}`,
-            access_token: mapboxgl.accessToken,
-            limit: 2
-          }
-        }
-      );
-
-      const stations = response.data.features.map(feature => ({
-        name: feature.text || "Fuel Station",
-        coordinates: feature.center,
-        address: feature.place_name
-      }));
-
-      setFuelStations(stations);
-      addFuelStationsToMap(stations);
-      toast.success(`Found ${stations.length} nearby fuel stations`);
-    } catch (error) {
-      console.error("Error finding fuel stations:", error);
-      toast.error("Failed to find fuel stations");
-    } finally {
-      setIsLoadingFuelStations(false);
-    }
   };
 
-  // Add fuel stations to map
-  const addFuelStationsToMap = (stations) => {
-    if (!map) return;
+  const delayInfo = calculateBusDelay();
 
-    // Remove existing fuel station markers if any
-    if (map.getLayer('fuel-stations')) {
-      map.removeLayer('fuel-stations');
-      map.removeSource('fuel-stations');
-    }
-
-    // Add new fuel stations to the map
-    map.addSource('fuel-stations', {
-      type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: stations.map(station => ({
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            coordinates: station.coordinates
-          },
-          properties: {
-            title: station.name,
-            description: station.address
-          }
-        }))
-      }
-    });
-
-    map.addLayer({
-      id: 'fuel-stations',
-      type: 'circle',
-      source: 'fuel-stations',
-      paint: {
-        'circle-radius': 10,
-        'circle-color': '#FFA500',
-        'circle-stroke-width': 2,
-        'circle-stroke-color': '#FFF'
-      }
-    });
-
-    // Add click event to show popup
-    map.on('click', 'fuel-stations', (e) => {
-      const coordinates = e.features[0].geometry.coordinates.slice();
-      const description = e.features[0].properties.description;
-
-      while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
-        coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
-      }
-
-      new mapboxgl.Popup()
-        .setLngLat(coordinates)
-        .setHTML(description)
-        .addTo(map);
-    });
-
-    // Change the cursor to a pointer when the mouse is over the places layer.
-    map.on('mouseenter', 'fuel-stations', () => {
-      map.getCanvas().style.cursor = 'pointer';
-    });
-
-    // Change it back to a pointer when it leaves.
-    map.on('mouseleave', 'fuel-stations', () => {
-      map.getCanvas().style.cursor = '';
-    });
-  };
-
-  // Clear fuel stations from map
-  const clearFuelStations = () => {
-    if (map && map.getLayer('fuel-stations')) {
-      map.removeLayer('fuel-stations');
-      map.removeSource('fuel-stations');
-    }
-    setFuelStations([]);
-    setShowFuelStations(false);
-  };
-
-  // Fetch bus details
+  // API functions
   const fetchBusDetails = async () => {
     try {
       setLoading(true);
@@ -424,7 +245,6 @@ const DriverDashboard = () => {
     }
   };
 
-  // Handle stop arrival and update leaveTimestamp
   const handleStopArrival = async (stopIndex) => {
     try {
       const token = localStorage.getItem("token");
@@ -433,7 +253,7 @@ const DriverDashboard = () => {
       const currentStop = routePoints[stopIndex];
       const now = new Date();
       
-      const response = await axios.post(
+      await axios.post(
         `${API_URL}/update-stop-timestamp`,
         { 
           busId: busDetails._id,
@@ -459,7 +279,6 @@ const DriverDashboard = () => {
     }
   };
 
-  // Refresh all data
   const refreshData = async () => {
     setIsRefreshing(true);
     try {
@@ -477,7 +296,6 @@ const DriverDashboard = () => {
     }
   };
 
-  // Fetch location history
   const fetchLocationHistory = async (busId) => {
     try {
       const token = localStorage.getItem("token");
@@ -490,7 +308,6 @@ const DriverDashboard = () => {
     }
   };
 
-  // Fetch delayed buses
   const fetchDelayedBuses = async () => {
     try {
       const token = localStorage.getItem("token");
@@ -504,7 +321,75 @@ const DriverDashboard = () => {
     }
   };
 
-  // Initialize map
+  const reportDelay = async () => {
+    try {
+      setIsReportingDelay(true);
+      const token = localStorage.getItem("token");
+      if (!token || !busDetails?._id) return;
+
+      const response = await axios.post(
+        `${API_URL}/buses/report-delay`,
+        {
+          busId: busDetails._id,
+          reason: delayReason || delayInfo.reason,
+          duration: delayDuration || delayInfo.delayMinutes,
+          notes: delayNotes
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      if (response.data.success) {
+        toast.success("Delay reported successfully");
+        
+        await axios.post(
+          `${API_URL}/buses/${busDetails._id}/delay-notification`,
+          {
+            delayMinutes: delayDuration || delayInfo.delayMinutes,
+            reason: delayReason || delayInfo.reason,
+            nextStop: delayInfo.nextStop
+          },
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        
+        setShowDelayModal(false);
+        setDelayReason("");
+        setDelayDuration(10);
+        setDelayNotes("");
+        fetchBusDetails();
+      }
+    } catch (error) {
+      console.error("Error reporting delay:", error);
+      toast.error("Failed to report delay");
+    } finally {
+      setIsReportingDelay(false);
+    }
+  };
+
+  const resolveDelay = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      if (!token || !busDetails?._id) return;
+
+      const response = await axios.post(
+        `${API_URL}/buses/delay/resolve`,
+        { 
+          busId: busDetails._id,
+          resolve: true
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      if (response.data.success) {
+        toast.success("Delay resolved successfully");
+        fetchBusDetails();
+      }
+    } catch (error) {
+      console.error("Error resolving delay:", error);
+      toast.error("Failed to resolve delay");
+    }
+  };
+
+  // Map functions
   const initializeMap = (points) => {
     if (!points || points.length === 0) return;
 
@@ -569,7 +454,6 @@ const DriverDashboard = () => {
     });
   };
 
-  // Update navigation path
   const updateNavigationPath = async () => {
     if (!map || !location || nextStopIndex >= routePoints.length) return;
 
@@ -584,7 +468,6 @@ const DriverDashboard = () => {
       const currentLeg = routeData.legs[0];
       const currentStep = currentLeg.steps[0];
 
-      // Update navigation line
       if (map.getSource('navigation-route')) {
         map.removeLayer('navigation-route-line');
         map.removeSource('navigation-route');
@@ -613,7 +496,6 @@ const DriverDashboard = () => {
         }
       });
 
-      // Update instruction and ETA
       const instruction = currentStep.maneuver.instruction;
       setCurrentInstruction(instruction);
       setShowToast(true);
@@ -623,9 +505,8 @@ const DriverDashboard = () => {
         speakInstruction(instruction);
       }
 
-      // Check for potential delays
       const delayInfo = calculateBusDelay();
-      if (delayInfo.isDelayed && delayInfo.delayMinutes > 5) {
+      if (delayInfo.isDelayed && delayInfo.delayMinutes > 5 && !delayInfo.alreadyNotified) {
         toast.warning(`Potential delay detected: ${delayInfo.reason} (${formatTime(delayInfo.delayMinutes)})`);
       }
 
@@ -634,7 +515,7 @@ const DriverDashboard = () => {
     }
   };
 
-  // Start location sharing
+  // Location functions
   const startLocationSharing = () => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(handlePositionUpdate);
@@ -650,7 +531,6 @@ const DriverDashboard = () => {
     }
   };
 
-  // Stop location sharing
   const stopLocationSharing = () => {
     if (locationIntervalRef.current) {
       clearInterval(locationIntervalRef.current);
@@ -660,17 +540,15 @@ const DriverDashboard = () => {
     toast.info("Location sharing stopped");
   };
 
-  // Handle position updates
   const handlePositionUpdate = async (position) => {
     const { latitude, longitude, speed: currentSpeed } = position.coords;
     setLocation({ latitude, longitude });
-    setSpeed(currentSpeed ? (currentSpeed * 3.6) : 0); // Convert m/s to km/h
+    setSpeed(currentSpeed ? (currentSpeed * 3.6) : 0);
 
     try {
       const token = localStorage.getItem("token");
       if (!token || !busDetails?._id) return;
 
-      // Check if we've arrived at the next stop
       if (nextStopIndex < routePoints.length) {
         const nextStop = routePoints[nextStopIndex];
         const distanceToStop = calculateDistance(
@@ -680,7 +558,6 @@ const DriverDashboard = () => {
           nextStop.longitude
         );
 
-        // If within 100 meters of the next stop
         if (distanceToStop < 0.1) {
           await handleStopArrival(nextStopIndex);
           setCurrentStopIndex(nextStopIndex);
@@ -696,7 +573,6 @@ const DriverDashboard = () => {
         }
       }
 
-      // Continue with regular location update
       await axios.post(
         `${API_URL}/update-location`,
         { 
@@ -710,7 +586,24 @@ const DriverDashboard = () => {
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      // Update map marker
+      const delayInfo = calculateBusDelay();
+      if (delayInfo.isDelayed && delayInfo.delayMinutes > 5 && !delayInfo.alreadyNotified) {
+        try {
+          await axios.post(
+            `${API_URL}/buses/${busDetails._id}/delay-notification`,
+            {
+              delayMinutes: delayInfo.delayMinutes,
+              reason: delayInfo.reason,
+              nextStop: delayInfo.nextStop
+            },
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          toast.warning(`Delay notification sent to passengers`);
+        } catch (error) {
+          console.error("Error sending delay notification:", error);
+        }
+      }
+
       if (map) {
         if (!busMarker) {
           const markerEl = document.createElement("div");
@@ -729,87 +622,89 @@ const DriverDashboard = () => {
         map.flyTo({ center: [longitude, latitude], zoom: 14 });
       }
 
-      // Check for delays and auto-report if significant
-      const delayInfo = calculateBusDelay();
-      if (delayInfo.isDelayed && delayInfo.delayMinutes > 10) {
-        try {
-          await axios.post(
-            `${API_URL}/buses/report-delay`,
-            {
-              busId: busDetails._id,
-              reason: delayInfo.reason,
-              duration: delayInfo.delayMinutes
-            },
-            { headers: { Authorization: `Bearer ${token}` } }
-          );
-          toast.warning(`Delay of ${delayInfo.delayMinutes} minutes automatically reported`);
-        } catch (error) {
-          console.error("Error auto-reporting delay:", error);
-        }
-      }
     } catch (error) {
       console.error("Error sharing location:", error);
     }
   };
 
-  // Report delay
-  const reportDelay = async () => {
-    try {
-      setIsReportingDelay(true);
-      const token = localStorage.getItem("token");
-      if (!token || !busDetails?._id) return;
-
-      const response = await axios.post(
-        `${API_URL}/buses/report-delay`,
-        {
-          busId: busDetails._id,
-          reason: delayReason || delayInfo.reason,
-          duration: delayDuration || delayInfo.delayMinutes
-        },
-        { headers: { Authorization: `Bearer ${token}` } }
+  // Other functions
+  const calculateETAs = () => {
+    if (!location || !routePoints || routePoints.length === 0) return {};
+  
+    const currentTime = new Date();
+    const etas = {};
+    let cumulativeTime = 0;
+    
+    for (let i = nextStopIndex; i < routePoints.length; i++) {
+      const prevPoint = i === nextStopIndex ? 
+        { latitude: location.latitude, longitude: location.longitude } : 
+        routePoints[i - 1];
+      
+      const distance = calculateDistance(
+        prevPoint.latitude,
+        prevPoint.longitude,
+        routePoints[i].latitude,
+        routePoints[i].longitude
       );
-
-      if (response.data.success) {
-        toast.success("Delay reported successfully");
-        setShowDelayModal(false);
-        setDelayReason("");
-        setDelayDuration(10);
-        fetchBusDetails();
-      }
-    } catch (error) {
-      console.error("Error reporting delay:", error);
-      toast.error("Failed to report delay");
-    } finally {
-      setIsReportingDelay(false);
+      
+      const avgSpeed = speed > 0 ? speed : 30;
+      const timeInHours = distance / avgSpeed;
+      cumulativeTime += timeInHours * 60;
+      
+      etas[i] = {
+        minutes: Math.round(cumulativeTime),
+        arrivalTime: new Date(currentTime.getTime() + cumulativeTime * 60000),
+        distance: distance.toFixed(2)
+      };
     }
+  
+    return etas;
   };
 
-  // Resolve delay
-  const resolveDelay = async () => {
-    try {
-      const token = localStorage.getItem("token");
-      if (!token || !busDetails?._id) return;
-
-      const response = await axios.post(
-        `${API_URL}/buses/delays/role-based`,
-        { 
-          busId: busDetails._id,
-          resolve: true
-        },
-        { headers: { Authorization: `Bearer ${token}` } }
+  const calculateRouteProgress = () => {
+    if (!location || routePoints.length === 0) return 0;
+    
+    let totalDistance = 0;
+    let traveledDistance = 0;
+    
+    // Calculate total route distance
+    for (let i = 1; i < routePoints.length; i++) {
+      totalDistance += calculateDistance(
+        routePoints[i-1].latitude,
+        routePoints[i-1].longitude,
+        routePoints[i].latitude,
+        routePoints[i].longitude
       );
-
-      if (response.data.success) {
-        toast.success("Delay resolved successfully");
-        fetchBusDetails();
-      }
-    } catch (error) {
-      console.error("Error resolving delay:", error);
-      toast.error("Failed to resolve delay");
     }
+
+    // Calculate distance traveled
+    if (currentStopIndex > 0) {
+      // Add distance between all passed stops
+      for (let i = 1; i <= currentStopIndex; i++) {
+        traveledDistance += calculateDistance(
+          routePoints[i-1].latitude,
+          routePoints[i-1].longitude,
+          routePoints[i].latitude,
+          routePoints[i].longitude
+        );
+      }
+    }
+
+    // Add distance from current stop to current location
+    if (currentStopIndex < routePoints.length) {
+      traveledDistance += calculateDistance(
+        routePoints[currentStopIndex].latitude,
+        routePoints[currentStopIndex].longitude,
+        location.latitude,
+        location.longitude
+      );
+    }
+
+    // Calculate percentage
+    const percentage = (traveledDistance / totalDistance) * 100;
+    return Math.min(100, Math.max(0, Math.round(percentage)));
   };
 
-  // Handle route completion
   const handleRouteCompletion = () => {
     if (isReturnTrip) {
       const completionMessage = "Route completed! End of service.";
@@ -832,7 +727,6 @@ const DriverDashboard = () => {
     }
   };
 
-  // Speak instruction
   const speakInstruction = (text) => {
     if (speechSynthesisRef.current) {
       const utterance = new SpeechSynthesisUtterance(text);
@@ -842,7 +736,6 @@ const DriverDashboard = () => {
     }
   };
 
-  // Toggle voice assistant
   const toggleVoiceAssistant = () => {
     setVoiceEnabled(!voiceEnabled);
     if (!voiceEnabled && currentInstruction) {
@@ -850,7 +743,6 @@ const DriverDashboard = () => {
     }
   };
 
-  // Toggle map style
   const toggleMapStyle = () => {
     const styles = ["streets-v11", "satellite-streets-v11", "outdoors-v11"];
     const currentIndex = styles.indexOf(mapStyle);
@@ -861,13 +753,223 @@ const DriverDashboard = () => {
     }
   };
 
-  // Get leave timestamp for a stop
-  const getLeaveTimestamp = (stopId) => {
-    const stop = stopsWithTimestamps.find(s => s.stopId === stopId);
-    return stop ? stop.leaveTimestamp : null;
+  const findNearbyFuelStations = async () => {
+    try {
+      setIsLoadingFuelStations(true);
+      setShowFuelStations(true);
+      
+      // Allahabad coordinates [longitude, latitude]
+      const allahabadCenter = [81.8463, 25.4358];
+      
+      // Try different search terms - "petrol pump" works better in India than "fuel"
+      const response = await axios.get(
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/petrol%20pump.json`,
+        {
+          params: {
+            proximity: `${allahabadCenter[0]},${allahabadCenter[1]}`,
+            access_token: mapboxgl.accessToken,
+            limit: 10,
+            country: 'in',
+            types: 'poi',
+            bbox: '81.7,25.3,82.0,25.6' // Tighter bounding box around Allahabad
+          }
+        }
+      );
+  
+      if (response.data.features.length === 0) {
+        toast.warning("No petrol pumps found in Allahabad. Trying broader search...");
+        // Fallback to a broader search if no results
+        return await findFallbackFuelStations();
+      }
+  
+      const stations = response.data.features.map(feature => ({
+        name: feature.text || feature.properties.address || "Petrol Pump",
+        coordinates: feature.center,
+        address: feature.place_name
+      }));
+  
+      setFuelStations(stations);
+      addFuelStationsToMap(stations);
+      toast.success(`Found ${stations.length} petrol pumps in Allahabad`);
+    } catch (error) {
+      console.error("Error finding petrol pumps:", error);
+      toast.error("Failed to find petrol pumps. Please try again later.");
+    } finally {
+      setIsLoadingFuelStations(false);
+    }
+  };
+  
+  // Fallback function if primary search fails
+  const findFallbackFuelStations = async () => {
+    try {
+      const allahabadCenter = [81.8463, 25.4358];
+      
+      const response = await axios.get(
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/petrol.json`,
+        {
+          params: {
+            proximity: `${allahabadCenter[0]},${allahabadCenter[1]}`,
+            access_token: mapboxgl.accessToken,
+            limit: 5,
+            country: 'in'
+          }
+        }
+      );
+  
+      const stations = response.data.features.map(feature => ({
+        name: feature.text || "Fuel Station",
+        coordinates: feature.center,
+        address: feature.place_name
+      }));
+  
+      setFuelStations(stations);
+      addFuelStationsToMap(stations);
+      toast.info(`Found ${stations.length} fuel stations near Allahabad`);
+    } catch (error) {
+      console.error("Fallback search failed:", error);
+      toast.warning("Could not find fuel stations. Please check your internet connection.");
+    }
   };
 
-  // Render route stops
+  const addFuelStationsToMap = (stations) => {
+    if (!map) return;
+
+    if (map.getLayer('fuel-stations')) {
+      map.removeLayer('fuel-stations');
+      map.removeSource('fuel-stations');
+    }
+
+    map.addSource('fuel-stations', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: stations.map(station => ({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: station.coordinates
+          },
+          properties: {
+            title: station.name,
+            description: station.address
+          }
+        }))
+      }
+    });
+
+    map.addLayer({
+      id: 'fuel-stations',
+      type: 'circle',
+      source: 'fuel-stations',
+      paint: {
+        'circle-radius': 10,
+        'circle-color': '#FFA500',
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#FFF'
+      }
+    });
+
+    map.on('click', 'fuel-stations', (e) => {
+      const coordinates = e.features[0].geometry.coordinates.slice();
+      const description = e.features[0].properties.description;
+
+      while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
+        coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
+      }
+
+      new mapboxgl.Popup()
+        .setLngLat(coordinates)
+        .setHTML(description)
+        .addTo(map);
+    });
+
+    map.on('mouseenter', 'fuel-stations', () => {
+      map.getCanvas().style.cursor = 'pointer';
+    });
+
+    map.on('mouseleave', 'fuel-stations', () => {
+      map.getCanvas().style.cursor = '';
+    });
+  };
+
+  const clearFuelStations = () => {
+    if (map && map.getLayer('fuel-stations')) {
+      map.removeLayer('fuel-stations');
+      map.removeSource('fuel-stations');
+    }
+    setFuelStations([]);
+    setShowFuelStations(false);
+  };
+
+  const registerPushNotifications = async () => {
+    try {
+      const registration = await navigator.serviceWorker.register('/sw.js');
+      
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        throw new Error('Permission not granted');
+      }
+      
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(import.meta.env.VITE_VAPID_PUBLIC_KEY)
+      });
+      
+      const userId = localStorage.getItem('userId') || busDetails?.driverId;
+      await axios.post(`${API_URL}/subscribe`, { 
+        subscription, 
+        userId 
+      }, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` }
+      });
+      
+      setPushEnabled(true);
+      toast.success('Push notifications enabled');
+    } catch (error) {
+      console.error('Push registration failed:', error);
+      toast.error('Failed to enable push notifications');
+    }
+  };
+
+  const unsubscribePush = async () => {
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      
+      if (subscription) {
+        await subscription.unsubscribe();
+        
+        const userId = localStorage.getItem('userId') || busDetails?.driverId;
+        await axios.post(`${API_URL}/unsubscribe`, { 
+          userId 
+        }, {
+          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` }
+        });
+        
+        setPushEnabled(false);
+        toast.success("Notifications disabled");
+      }
+    } catch (error) {
+      console.error("Error unsubscribing:", error);
+      toast.error("Failed to disable notifications");
+    }
+  };
+
+  const urlBase64ToUint8Array = (base64String) => {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding)
+      .replace(/-/g, '+')
+      .replace(/_/g, '/');
+
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  };
+
   const renderRouteStops = () => {
     return (
       <div className="route-progress-container">
@@ -904,7 +1006,6 @@ const DriverDashboard = () => {
                       <small>
                         <strong>Estimated: </strong>
                         {stopETAs[index].arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        
                       </small><br/>
                       <small>
                         <strong>reached in {stopETAs[index].minutes} min</strong>
@@ -931,9 +1032,23 @@ const DriverDashboard = () => {
     );
   };
 
-  // Effect hooks
+  // Effects
   useEffect(() => {
     fetchBusDetails();
+    
+    const checkPushSupport = async () => {
+      const supported = 'Notification' in window && 'serviceWorker' in navigator;
+      setIsPushSupported(supported);
+      
+      if (supported) {
+        const registration = await navigator.serviceWorker.ready;
+        const subscription = await registration.pushManager.getSubscription();
+        setPushEnabled(!!subscription);
+      }
+    };
+    
+    checkPushSupport();
+
     return () => {
       if (locationIntervalRef.current) {
         clearInterval(locationIntervalRef.current);
@@ -1196,27 +1311,29 @@ const DriverDashboard = () => {
                 </CRow>
                 
                 <CRow className="mb-3">
-                  <CCol>
-                    <CButton 
-                      color={voiceEnabled ? "success" : "secondary"} 
-                      onClick={toggleVoiceAssistant}
-                      className="w-100"
-                    >
-                      <CIcon icon={voiceEnabled ? cilVolumeHigh : cilVolumeOff} className="me-2" />
-                      {voiceEnabled ? "Voice On" : "Voice Off"}
-                    </CButton>
-                  </CCol>
-                  <CCol>
-                    <CButton 
-                      color="warning" 
-                      onClick={() => setShowDelayModal(true)}
-                      className="w-100"
-                    >
-                      <CIcon icon={cilWarning} className="me-2" />
-                      Report Delay
-                    </CButton>
-                  </CCol>
-                </CRow>
+  <CCol>
+    <CButton 
+      color={delayInfo.isDelayed ? "danger" : "warning"} 
+      onClick={() => setShowDelayModal(true)}
+      className="w-100"
+      disabled={delayInfo.isDelayed}
+    >
+      <CIcon icon={cilWarning} className="me-2" />
+      Report Delay
+    </CButton>
+  </CCol>
+  <CCol>
+    <CButton 
+      color={delayInfo.isDelayed ? "success" : "secondary"} 
+      onClick={resolveDelay}
+      className="w-100"
+      disabled={!delayInfo.isDelayed}
+    >
+      <CIcon icon={cilCheckCircle} className="me-2" />
+      Resolve Delay
+    </CButton>
+  </CCol>
+</CRow>
                 
                 <CRow>
                   <CCol>
@@ -1229,6 +1346,50 @@ const DriverDashboard = () => {
                     </CButton>
                   </CCol>
                 </CRow>
+              </CCardBody>
+            </CCard>
+
+            <CCard className="mt-4 shadow-sm">
+              <CCardHeader className="d-flex justify-content-between align-items-center">
+                <span>Notification Settings</span>
+                <CBadge color={pushEnabled ? "success" : "secondary"}>
+                  {pushEnabled ? "Active" : "Inactive"}
+                </CBadge>
+              </CCardHeader>
+              <CCardBody>
+                {isPushSupported ? (
+                  <>
+                    <div className="mb-3">
+                      <CButton 
+                        color={pushEnabled ? "success" : "primary"} 
+                        onClick={pushEnabled ? unsubscribePush : registerPushNotifications}
+                        className="w-100"
+                      >
+                        <CIcon icon={cilBell} className="me-2" />
+                        {pushEnabled ? "Disable Notifications" : "Enable Notifications"}
+                      </CButton>
+                    </div>
+                    
+                    {pushEnabled && (
+                      <CAlert color="info" className="d-flex align-items-center">
+                        <CIcon icon={cilInfo} className="flex-shrink-0 me-2" />
+                        <div>
+                          You'll receive notifications for:
+                          <ul className="mb-0 mt-2">
+                            <li>Bus delays and schedule changes</li>
+                            <li>Important route updates</li>
+                            <li>Emergency announcements</li>
+                          </ul>
+                        </div>
+                      </CAlert>
+                    )}
+                  </>
+                ) : (
+                  <CAlert color="warning" className="d-flex align-items-center">
+                    <CIcon icon={cilWarning} className="flex-shrink-0 me-2" />
+                    <span>Push notifications not supported in your browser</span>
+                  </CAlert>
+                )}
               </CCardBody>
             </CCard>
 
@@ -1352,107 +1513,104 @@ const DriverDashboard = () => {
         </CRow>
       )}
 
-      {/* Delay Report Modal */}
       <CModal visible={showDelayModal} onClose={() => setShowDelayModal(false)}>
-  <CModalHeader closeButton>
-    <CModalTitle>Report Delay</CModalTitle>
-  </CModalHeader>
-  <CModalBody>
-    <CForm>
-      <div className="mb-3">
-        <CAlert color="info">
-          <div className="d-flex justify-content-between align-items-center">
-            <div>
-              <strong>Current Delay:</strong> {delayInfo.reason}
+        <CModalHeader closeButton>
+          <CModalTitle>Report Delay</CModalTitle>
+        </CModalHeader>
+        <CModalBody>
+          <CForm>
+            <div className="mb-3">
+              <CAlert color="info">
+                <div className="d-flex justify-content-between align-items-center">
+                  <div>
+                    <strong>Current Delay:</strong> {delayInfo.reason}
+                  </div>
+                  <CBadge color="danger">
+                    {formatTime(delayInfo.delayMinutes)}
+                  </CBadge>
+                </div>
+              </CAlert>
             </div>
-            <CBadge color="danger">
-              {formatTime(delayInfo.delayMinutes)}
-            </CBadge>
-          </div>
-        </CAlert>
-      </div>
-      
-      <div className="mb-3">
-        <label htmlFor="delayReason" className="form-label">Reason for delay*</label>
-        <CFormSelect
-          id="delayReason"
-          value={delayReason}
-          onChange={(e) => setDelayReason(e.target.value)}
-          required
-        >
-          <option value="">Select a reason...</option>
-          <option value="Traffic congestion">🚦 Traffic congestion</option>
-          <option value="Road accident">🚨 Road accident</option>
-          <option value="Road construction">🚧 Road construction</option>
-          <option value="Vehicle breakdown">🔧 Vehicle breakdown</option>
-          <option value="Passenger delay">👥 Passenger delay</option>
-          <option value="Weather conditions">⛈️ Weather conditions</option>
-          <option value="Police activity">👮 Police activity</option>
-          <option value="Medical emergency">🚑 Medical emergency</option>
-          <option value="Mechanical issue">⚙️ Mechanical issue</option>
-          <option value="Driver change">👤 Driver change</option>
-          <option value="Schedule adjustment">⏱️ Schedule adjustment</option>
-          <option value="Other">❔ Other (specify below)</option>
-        </CFormSelect>
-      </div>
-      
-      {delayReason === "Other" && (
-        <div className="mb-3">
-          <label htmlFor="customReason" className="form-label">Specify reason*</label>
-          <CFormInput
-            type="text"
-            id="customReason"
-            value={delayNotes}
-            onChange={(e) => setDelayNotes(e.target.value)}
-            placeholder="Please specify the delay reason"
-            required={delayReason === "Other"}
-          />
-        </div>
-      )}
-      
-      <div className="mb-3">
-        <label htmlFor="delayDuration" className="form-label">Estimated delay duration*</label>
-        <CFormSelect
-          id="delayDuration"
-          value={delayDuration}
-          onChange={(e) => setDelayDuration(Number(e.target.value))}
-          required
-        >
-          <option value="5">5 minutes</option>
-          <option value="10">10 minutes</option>
-          <option value="15">15 minutes</option>
-          <option value="20">20 minutes</option>
-          <option value="30">30 minutes</option>
-          <option value="45">45 minutes</option>
-          <option value="60">60 minutes</option>
-          <option value="90">90 minutes</option>
-          <option value="120">2 hours</option>
-          <option value="180">3+ hours</option>
-        </CFormSelect>
-      </div>
-      
-      
-    </CForm>
-  </CModalBody>
-  <CModalFooter>
-    <CButton color="secondary" onClick={() => setShowDelayModal(false)}>
-      Cancel
-    </CButton>
-    <CButton 
-      color="primary" 
-      onClick={reportDelay}
-      disabled={isReportingDelay || !delayReason || (delayReason === "Other" && !delayNotes)}
-    >
-      {isReportingDelay ? (
-        <>
-          <CSpinner size="sm" /> Reporting...
-        </>
-      ) : (
-        "Submit Report"
-      )}
-    </CButton>
-  </CModalFooter>
-</CModal>
+            
+            <div className="mb-3">
+              <label htmlFor="delayReason" className="form-label">Reason for delay*</label>
+              <CFormSelect
+                id="delayReason"
+                value={delayReason}
+                onChange={(e) => setDelayReason(e.target.value)}
+                required
+              >
+                <option value="">Select a reason...</option>
+                <option value="Traffic congestion">🚦 Traffic congestion</option>
+                <option value="Road accident">🚨 Road accident</option>
+                <option value="Road construction">🚧 Road construction</option>
+                <option value="Vehicle breakdown">🔧 Vehicle breakdown</option>
+                <option value="Passenger delay">👥 Passenger delay</option>
+                <option value="Weather conditions">⛈️ Weather conditions</option>
+                <option value="Police activity">👮 Police activity</option>
+                <option value="Medical emergency">🚑 Medical emergency</option>
+                <option value="Mechanical issue">⚙️ Mechanical issue</option>
+                <option value="Driver change">👤 Driver change</option>
+                <option value="Schedule adjustment">⏱️ Schedule adjustment</option>
+                <option value="Other">❔ Other (specify below)</option>
+              </CFormSelect>
+            </div>
+            
+            {delayReason === "Other" && (
+              <div className="mb-3">
+                <label htmlFor="customReason" className="form-label">Specify reason*</label>
+                <CFormInput
+                  type="text"
+                  id="customReason"
+                  value={delayNotes}
+                  onChange={(e) => setDelayNotes(e.target.value)}
+                  placeholder="Please specify the delay reason"
+                  required={delayReason === "Other"}
+                />
+              </div>
+            )}
+            
+            <div className="mb-3">
+              <label htmlFor="delayDuration" className="form-label">Estimated delay duration*</label>
+              <CFormSelect
+                id="delayDuration"
+                value={delayDuration}
+                onChange={(e) => setDelayDuration(Number(e.target.value))}
+                required
+              >
+                <option value="5">5 minutes</option>
+                <option value="10">10 minutes</option>
+                <option value="15">15 minutes</option>
+                <option value="20">20 minutes</option>
+                <option value="30">30 minutes</option>
+                <option value="45">45 minutes</option>
+                <option value="60">60 minutes</option>
+                <option value="90">90 minutes</option>
+                <option value="120">2 hours</option>
+                <option value="180">3+ hours</option>
+              </CFormSelect>
+            </div>
+          </CForm>
+        </CModalBody>
+        <CModalFooter>
+          <CButton color="secondary" onClick={() => setShowDelayModal(false)}>
+            Cancel
+          </CButton>
+          <CButton 
+            color="primary" 
+            onClick={reportDelay}
+            disabled={isReportingDelay || !delayReason || (delayReason === "Other" && !delayNotes)}
+          >
+            {isReportingDelay ? (
+              <>
+                <CSpinner size="sm" /> Reporting...
+              </>
+            ) : (
+              "Submit Report"
+            )}
+          </CButton>
+        </CModalFooter>
+      </CModal>
 
       {showToast && (
         <div style={{ position: 'fixed', bottom: '20px', right: '20px', zIndex: 1000 }}>

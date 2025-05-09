@@ -2,6 +2,11 @@ import UserModel from "../model/UserModel.js";
 import bcrypt from "bcryptjs";
 import { generateToken, setTokenCookie } from "../utils/jwt.js";
 import {
+  subscriptions,
+  sendPushToUser,
+  sendDelayNotification
+} from '../utils/webPush.js';
+import {
   registerSchema,
   loginSchema,
   changePasswordSchema,
@@ -140,8 +145,6 @@ class UserController {
   };
 
   // Get User Profile
-  // In UserController.js
-  // In UserController.js
   getCurrentUser = async (req, res) => {
     try {
       // Get user with sensitive fields excluded
@@ -242,7 +245,7 @@ class UserController {
     }
   }
 
-
+//get user by id
   getUserById = async (req, res) => {
     try {
       if (!req.params.userId) {
@@ -337,6 +340,62 @@ class UserController {
       });
     }
   };
+  
+
+
+// Add subscription route
+subscribe= async (req, res) => {
+  const { subscription, userId } = req.body;
+  
+  if (!subscription || !userId) {
+    return res.status(400).json({ error: 'Subscription and userId required' });
+  }
+
+  subscriptions.set(userId, subscription);
+  res.status(201).json({ success: true });
+};
+
+// Remove subscription route
+unsubscribe=async(req, res) => {
+  const { userId } = req.body;
+  
+  if (!userId) {
+    return res.status(400).json({ error: 'userId required' });
+  }
+
+  subscriptions.delete(userId);
+  res.status(200).json({ success: true });
+};
+
+// Test notification route
+sendById =async (req, res) => {
+  const { userId } = req.params;
+  await sendPushToUser(userId, {
+    title: 'Test Notification',
+    body: 'Hello from server!',
+  });
+  res.send("Notification sent");
+};
+
+// Delay notification route
+delayNotification= async (req, res) => {
+  const { busId } = req.params;
+  const { delayMinutes, reason, nextStop } = req.body;
+
+  const count = await sendDelayNotification(busId, {
+    delayMinutes,
+    reason,
+    nextStop: nextStop || 'Unknown'
+  });
+
+  res.json({
+    success: true,
+    message: `Delay notification sent to ${count} users`
+  });
+};
+
+
+  
   
 };
 

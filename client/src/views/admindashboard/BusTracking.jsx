@@ -32,6 +32,7 @@ import axios from 'axios';
 import MapboxMap from '../../components/MapboxMap';
 import AppHeader from '../../components/AppHeader';
 import AppSidebar from '../../components/AppSidebar';
+
 const API_URL = import.meta.env.VITE_API_URL;
 
 const BusTracking = () => {
@@ -41,6 +42,8 @@ const BusTracking = () => {
   const [error, setError] = useState('');
   const [refreshInterval, setRefreshInterval] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(new Date());
+  const [showDelayPopup, setShowDelayPopup] = useState(false);
+  const [delayAcknowledged, setDelayAcknowledged] = useState(false);
 
   const fetchBusDetails = useCallback(async () => {
     try {
@@ -51,7 +54,20 @@ const BusTracking = () => {
       });
       
       if (response.data.success) {
-        setBusData(response.data.data.bus);
+        const busDetails = response.data.data.busDetails;
+        const transformedData = {
+          ...busDetails,
+          bus: {
+            ...busDetails,
+            currentLocation: busDetails.currentLocation,
+            trackingHistory: busDetails.recentTracking || [],
+            delayInfo: busDetails.delayInfo || null,
+            routeId: busDetails.routeId,
+            driverId: busDetails.driverId
+          }
+        };
+        
+        setBusData(transformedData.bus);
         setError('');
         setLastRefresh(new Date());
       } else {
@@ -74,11 +90,28 @@ const BusTracking = () => {
     return () => clearInterval(interval);
   }, [fetchBusDetails]);
 
+  useEffect(() => {
+    if (busData?.delayInfo?.isDelayed && !delayAcknowledged) {
+      setShowDelayPopup(true);
+      
+      const timer = setTimeout(() => {
+        setShowDelayPopup(false);
+      }, 30000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [busData, delayAcknowledged]);
+
   const handleManualRefresh = () => {
     clearInterval(refreshInterval);
     fetchBusDetails();
     const interval = setInterval(fetchBusDetails, 150000);
     setRefreshInterval(interval);
+  };
+
+  const acknowledgeDelay = () => {
+    setShowDelayPopup(false);
+    setDelayAcknowledged(true);
   };
 
   const formatTime = (minutes) => {
@@ -98,6 +131,23 @@ const BusTracking = () => {
     if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)} minutes ago`;
     if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)} hours ago`;
     return `${Math.floor(diffInSeconds / 86400)} days ago`;
+  };
+
+  const getDelayDuration = (bus) => {
+    if (!bus?.delayInfo?.timestamp) return "N/A";
+    
+    const delayTime = new Date(bus.delayInfo.timestamp);
+    const now = new Date();
+    const diffMs = now - delayTime;
+    
+    const diffMinutes = Math.floor(diffMs / (1000 * 60));
+    const diffHours = Math.floor(diffMinutes / 60);
+    const remainingMinutes = diffMinutes % 60;
+    
+    if (diffHours > 0) {
+      return `${diffHours}h ${remainingMinutes}m`;
+    }
+    return `${diffMinutes}m`;
   };
 
   const calculateOccupancyPercentage = () => {
@@ -145,7 +195,6 @@ const BusTracking = () => {
     );
   }
 
-  // Transform location data for MapboxMap
   const currentLocation = busData.currentLocation ? {
     latitude: busData.currentLocation.latitude,
     longitude: busData.currentLocation.longitude,
@@ -169,9 +218,48 @@ const BusTracking = () => {
   return (
     <div className="wrapper d-flex flex-column min-vh-100 bg-light">
       <AppSidebar />
-      <div className="body flex-grow-1 px-3">
+      <div className="wrapper d-flex flex-column min-vh-100">
         <AppHeader />
         
+        {/* Delay Popup Notification */}
+        {showDelayPopup && busData?.delayInfo?.isDelayed && (
+          <div className="delay-popup-overlay">
+            <div className="delay-popup-container bg-warning rounded shadow-lg p-4">
+              <div className="d-flex justify-content-between align-items-start mb-3">
+                <h4 className="mb-0">
+                  <CIcon icon={cilWarning} className="me-2" />
+                  Bus Delay Alert
+                </h4>
+                <CButton 
+                  color="transparent" 
+                  onClick={acknowledgeDelay}
+                  className="p-0"
+                >
+                  &times;
+                </CButton>
+              </div>
+              
+              <div className="delay-details">
+                <p><strong>Bus:</strong> {busData.busNumber}</p>
+                <p><strong>Route:</strong> {busData.routeId?.routeName || 'N/A'}</p>
+                <p><strong>Reason:</strong> {busData.delayInfo.reason || 'Not specified'}</p>
+                <p><strong>Duration:</strong> {getDelayDuration(busData)}</p>
+                <p><strong>Delay Since:</strong> {formatTimestamp(busData.delayInfo.timestamp)}</p>
+              </div>
+              
+              <div className="d-flex justify-content-end mt-3">
+                <CButton 
+                  color="dark" 
+                  onClick={acknowledgeDelay}
+                  className="ms-2"
+                >
+                  Acknowledge
+                </CButton>
+              </div>
+            </div>
+          </div>
+        )}
+
         <CRow className="mb-4">
           <CCol xs={12}>
             <CCard className="bus-tracking-card shadow-sm">
@@ -187,6 +275,11 @@ const BusTracking = () => {
                       >
                         {busData.status.toUpperCase()}
                       </CBadge>
+                      {busData.delayInfo?.isDelayed && (
+                        <CBadge color="warning" className="me-2">
+                          DELAYED
+                        </CBadge>
+                      )}
                       <small className="text-muted">
                         Last updated: {formatTimestamp(lastRefresh)}
                       </small>
@@ -206,7 +299,7 @@ const BusTracking = () => {
               </CCardHeader>
               
               <CCardBody>
-                {/* Delay Alert - Displayed prominently at the top */}
+                {/* Delay Alert Banner */}
                 {busData.delayInfo?.isDelayed && (
                   <CRow className="mb-4">
                     <CCol>
@@ -217,12 +310,17 @@ const BusTracking = () => {
                           <p className="mb-1">
                             <strong>Reason:</strong> {busData.delayInfo.reason || 'Not specified'}
                           </p>
-                          {busData.delayInfo.duration && (
-                            <p className="mb-0">
-                              <strong>Duration:</strong> {formatTime(busData.delayInfo.duration)}
-                            </p>
-                          )}
+                          <p className="mb-0">
+                            <strong>Duration:</strong> {getDelayDuration(busData)}
+                          </p>
                         </div>
+                        <CButton 
+                          color="warning" 
+                          onClick={() => setShowDelayPopup(true)}
+                          className="ms-auto"
+                        >
+                          View Details
+                        </CButton>
                       </CAlert>
                     </CCol>
                   </CRow>
@@ -390,6 +488,37 @@ const BusTracking = () => {
           </CCol>
         </CRow>
       </div>
+
+      {/* CSS styles for the popup */}
+      <style jsx>{`
+        .delay-popup-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background-color: rgba(0,0,0,0.5);
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          z-index: 1050;
+        }
+        
+        .delay-popup-container {
+          width: 90%;
+          max-width: 500px;
+          animation: fadeIn 0.3s ease-out;
+        }
+        
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(-20px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .delay-details p {
+          margin-bottom: 0.5rem;
+        }
+      `}</style>
     </div>
   );
 };

@@ -147,93 +147,107 @@ class BusController {
 
   // ✅ Get Bus by ID (optimized)
   
-getBusById = async (req, res) => {
-  try {
-      // Validate ID format first
-      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-          return res.status(400).json({
-              success: false,
-              message: "Invalid bus ID format"
-          });
+  getBusById = async (req, res) => {
+    try {
+      // Validate ID format
+      const busId = req.params.id;
+      if (!mongoose.Types.ObjectId.isValid(busId)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid bus ID format"
+        });
       }
-
-      // Find bus with deep population
-      const bus = await BusModel.findById(req.params.id)
+  
+      // Execute all async operations in parallel
+      const [bus, trackingHistory, delayReport] = await Promise.all([
+        BusModel.findById(busId)
           .populate({
-              path: 'driverId',
-              select: 'licenseNumber status',
-              populate: {
-                  path: 'userId',
-                  select: 'name email phone profileImage'
-              }
+            path: 'driverId',
+            select: 'licenseNumber status',
+            populate: {
+              path: 'userId',
+              select: 'name email phone profileImage'
+            }
           })
           .populate({
-              path: 'routeId',
-              select: 'routeName startLocation endLocation stops totalDistance estimatedDuration',
-              populate: {
-                  path: 'stops',
-                  select: 'name location order'
-              }
+            path: 'routeId',
+            select: 'routeName startLocation endLocation stops totalDistance estimatedDuration',
+            populate: {
+              path: 'stops',
+              select: 'name location order'
+            }
           })
-          .lean();
-
-      if (!bus) {
-          return res.status(404).json({ 
-              success: false, 
-              message: "Bus not found" 
-          });
-      }
-
-      // Get recent tracking history with additional data
-      const trackingHistory = await BusTrackingModel.find({ busId: bus._id })
+          .lean(),
+        
+        BusTrackingModel.find({ busId })
           .sort({ timestamp: -1 })
           .limit(15)
           .select('location speed status timestamp')
-          .lean();
-
-      // Calculate average speed from tracking history
+          .lean(),
+        
+        DelayReport.findOne({ busId }) // Changed to findOne with busId reference
+          .sort({ createdAt: -1 }) // Get most recent delay report
+          .lean()
+      ]);
+  
+      if (!bus) {
+        return res.status(404).json({ 
+          success: false, 
+          message: "Bus not found" 
+        });
+      }
+  
+      // Calculate average speed
       const avgSpeed = trackingHistory.length > 0 
-          ? trackingHistory.reduce((sum, entry) => sum + entry.speed, 0) / trackingHistory.length
-          : 0;
-
-      // Format the response data
+        ? trackingHistory.reduce((sum, entry) => sum + entry.speed, 0) / trackingHistory.length
+        : 0;
+  
+      // Format response data
       const responseData = {
-          bus: {
-              ...bus,
-              stats: {
-                  avgSpeed: parseFloat(avgSpeed.toFixed(2)),
-                  lastUpdated: trackingHistory[0]?.timestamp || null
-              },
-              trackingHistory
-          }
+        success: true,
+        data: {
+          busDetails: bus,
+          performanceMetrics: {
+            averageSpeed: parseFloat(avgSpeed.toFixed(2)),
+            lastUpdate: trackingHistory[0]?.timestamp || null,
+            delayStatus: delayReport ? {
+              delayMinutes: delayReport.delayMinutes,
+              reason: delayReport.reason,
+              reportedAt: delayReport.createdAt
+            } : null
+          },
+          recentTracking: trackingHistory
+        }
       };
-
-      res.status(200).json({ 
-          success: true, 
-          data: responseData
-      });
-
-  } catch (err) {
+  
+      return res.status(200).json(responseData);
+  
+    } catch (err) {
       console.error("Error fetching bus details:", err);
       
-      // Handle specific errors
-      let errorMessage = "Internal server error";
-      let statusCode = 500;
-      
-      if (err.name === 'CastError') {
-          errorMessage = "Invalid bus ID format";
-          statusCode = 400;
-      } else if (err.name === 'MongoError') {
-          errorMessage = "Database operation failed";
+      // Error response object
+      const errorResponse = {
+        success: false,
+        message: "Internal server error",
+        ...(process.env.NODE_ENV === 'development' && { 
+          error: err.message,
+          stack: err.stack 
+        })
+      };
+  
+      // Specific error handling
+      if (err instanceof mongoose.Error.CastError) {
+        errorResponse.message = "Invalid ID format";
+        return res.status(400).json(errorResponse);
       }
-
-      res.status(statusCode).json({ 
-          success: false, 
-          message: errorMessage,
-          error: process.env.NODE_ENV === 'development' ? err.message : undefined
-      });
-  }
-};
+      
+      if (err instanceof mongoose.Error) {
+        errorResponse.message = "Database operation failed";
+      }
+  
+      return res.status(500).json(errorResponse);
+    }
+  };
 
 
 //update bus
@@ -489,26 +503,25 @@ updateBus = async (req, res) => {
   // ✅ Resolve Delay
   resolveDelay = async (req, res) => {
     try {
-      const busId = req.params.id;
-      const bus = await BusModel.findById(busId);
-      
+      const { busId } = req.body;
+       const bus = await BusModel.findById(busId);
       if (!bus) {
         return res.status(404).json({ 
           success: false, 
           message: "Bus not found" 
         });
       }
-
+  
       if (!bus.delayInfo?.isDelayed) {
         return res.status(400).json({ 
           success: false, 
           message: "Bus is not currently delayed" 
         });
       }
-
+  
       bus.delayInfo.isDelayed = false;
       await bus.save();
-
+  
       res.status(200).json({ 
         success: true, 
         message: "Delay resolved successfully",
@@ -522,6 +535,7 @@ updateBus = async (req, res) => {
       });
     }
   };
+  
 
   // ✅ Get Dashboard Stats (optimized)
   getDashboardData = async (req, res) => {
@@ -576,74 +590,79 @@ updateBus = async (req, res) => {
   // ✅ Search Bus by Number (optimized)
   searchBus = async (req, res) => {
     try {
-      // Validate input
       const { busNumber } = req.params;
-      
+  
+      // Input validation
       if (!busNumber || busNumber.trim() === '') {
-        return res.status(400).json({ 
-          success: false, 
+        return res.status(400).json({
+          success: false,
           message: "Bus number is required",
           errorCode: "MISSING_BUS_NUMBER"
         });
       }
-
-      // Sanitize bus number (remove extra spaces, etc.)
+  
       const cleanBusNumber = busNumber.trim().toUpperCase();
-
-      // Search for bus with case-insensitive exact match
-      const bus = await BusModel.findOne({ 
+  
+      // Search for bus
+      const bus = await BusModel.findOne({
         busNumber: { $regex: `^${cleanBusNumber}$`, $options: 'i' }
       })
-      .populate({
-        path: 'routeId',
-        select: 'routeName startLocation endLocation stops'
-      })
-      .populate({
-        path: 'driverId',
-        select: 'name contactNumber',
-        populate: {
-          path: 'userId',
-          select: 'name email phone'
-        }
-      })
-      .lean(); // Use lean() for better performance
-
+        .populate({
+          path: 'routeId',
+          select: 'routeName startLocation endLocation stops'
+        })
+        .populate({
+          path: 'driverId',
+          select: 'name contactNumber',
+          populate: {
+            path: 'userId',
+            select: 'name email phone'
+          }
+        })
+        .lean(); // Better for read-only performance
+  
       if (!bus) {
-        return res.status(404).json({ 
-          success: false, 
+        return res.status(404).json({
+          success: false,
           message: "Bus not found",
           errorCode: "BUS_NOT_FOUND"
         });
       }
-
-      // Format the response
-      
-
-      res.status(200).json({ 
-        success: true, 
-        data: bus  
+  
+      // Find most recent delay report
+      const delayReport = await DelayReport.findOne({ bus: bus._id })
+        .sort({ createdAt: -1 })
+        .lean();
+  
+      // Send response
+      return res.status(200).json({
+        success: true,
+        data: {
+          bus,
+          latestDelay: delayReport || null
+        }
       });
-
+  
     } catch (err) {
       console.error("Error searching bus:", err);
-      
-      // Handle specific errors
+  
       if (err.name === 'CastError') {
-        return res.status(400).json({ 
-          success: false, 
+        return res.status(400).json({
+          success: false,
           message: "Invalid bus number format",
           errorCode: "INVALID_BUS_NUMBER_FORMAT"
         });
       }
-
-      res.status(500).json({ 
-        success: false, 
+  
+      return res.status(500).json({
+        success: false,
         message: "Failed to search for bus",
         errorCode: "SEARCH_FAILED",
         error: process.env.NODE_ENV === 'development' ? err.message : undefined
       });
     }
   };
+  
 
   
   // ✅ Get Bus Location History
