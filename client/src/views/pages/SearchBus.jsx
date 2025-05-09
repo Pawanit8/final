@@ -91,7 +91,6 @@ const SearchBus = () => {
   const [manualTracking, setManualTracking] = useState(false);
   const [lastCellTowerUpdate, setLastCellTowerUpdate] = useState(null);
 
-
   // Helper functions
   const calculateDistance = useCallback((lat1, lon1, lat2, lon2) => {
     const R = 6371;
@@ -134,7 +133,7 @@ const SearchBus = () => {
 
     const successCallback = (position) => {
       const { latitude, longitude } = position.coords;
-      setUserCoordinates([longitude, latitude]);
+      setUserCoordinates(prev => [...prev, [longitude, latitude]]);
       
       // Update bus location based on user's position
       if (busInfo.route && busInfo.route.stops) {
@@ -155,7 +154,7 @@ const SearchBus = () => {
       console.error('Error getting location:', error);
       // If GPS fails, try using cell tower location
       if (error.code === error.PERMISSION_DENIED && cellTowerLocation) {
-        setUserCoordinates([cellTowerLocation.longitude, cellTowerLocation.latitude]);
+        setUserCoordinates(prev => [...prev, [cellTowerLocation.longitude, cellTowerLocation.latitude]]);
         if (busInfo.route && busInfo.route.stops) {
           const nextStop = busInfo.route.stops[nextStopIndex];
           if (nextStop) {
@@ -207,7 +206,7 @@ const SearchBus = () => {
     <CAlert color="warning" className="mb-3">
       <div className="d-flex align-items-center justify-content-between">
         <div>
-          <CIcon icon={cilSignalCellularOff} className="me-2" />
+          
           Offline Mode - Using your device GPS for tracking
         </div>
         <CButton 
@@ -247,47 +246,52 @@ const SearchBus = () => {
   
       if (res.data.success) {
         const { data } = res.data;
+        const busData = data.bus; // Your response has the bus data in data.bus
   
-        if (!data || !data.bus) {
-          throw new Error("Invalid bus data format");
+        if (!busData) {
+          throw new Error("Bus data not found in response");
         }
   
-        const { routeId, currentLocation, delayInfo } = data.bus;
-
+        // Reverse stops if it's a return trip
+        const stops = busData.isReturnTrip 
+          ? [...(busData.routeId.stops || [])].reverse() 
+          : busData.routeId.stops || [];
+        console.log("🚀 ~ handleSearch ~ busData :", busData )
+  
         const points = [  
-          { ...routeId.startLocation, type: 'start' },
-          ...(routeId.stops || []).map(stop => ({ ...stop, type: 'stop' })),
-          { ...routeId.endLocation, type: 'end' }
+          { ...busData.routeId.startLocation, type: 'start' },
+          ...stops.map(stop => ({ ...stop, type: 'stop' })),
+          { ...busData.routeId.endLocation, type: 'end' }
         ];
         
         setRoutePoints(points);
         setNextStopIndex(1);
-        setDelayInfo(delayInfo || data.latestDelay);
-
-        if (delayInfo?.isDelayed) {
+        setDelayInfo(busData.delayInfo || null);
+  
+        if (busData.delayInfo?.isDelayed) {
           setShowDelayPopup(true);
         }
   
         setBusInfo({
-          _id: data.bus._id,
-          busNumber: data.bus.busNumber,
-          capacity: data.bus.capacity,
-          startLocation: routeId.startLocation,
-          endLocation: routeId.endLocation,
-          stops: routeId.stops,
-          routeName: routeId.routeName,
-          isReturnTrip: data.bus.isReturnTrip,
-          status: data.bus.status,
-          driverId: data.bus.driverId,
-          duration: data?.bus?.latestDelay?.duration
+          _id: busData._id,
+          busNumber: busData.busNumber,
+          capacity: busData.capacity,
+          startLocation: busData.routeId.startLocation,
+          endLocation: busData.routeId.endLocation,
+          stops: stops,
+          routeName: busData.routeId.routeName,
+          isReturnTrip: busData.isReturnTrip,
+          status: busData.status,
+          driverId: busData.driverId,
+          duration: busData.delayInfo?.duration
         });
   
-        if (currentLocation) {
+        if (busData.currentLocation) {
           const locationData = {
-            latitude: currentLocation.latitude,
-            longitude: currentLocation.longitude,
-            speed: currentLocation.speed,
-            timestamp: currentLocation.timestamp
+            latitude: busData.currentLocation.latitude,
+            longitude: busData.currentLocation.longitude,
+            speed: busData.currentLocation.speed,
+            timestamp: new Date(busData.currentLocation.timestamp).getTime()
           };
           
           if (busLocation) {
@@ -312,9 +316,9 @@ const SearchBus = () => {
           }
         }
   
-        setPassengerCount(Math.floor(Math.random() * data.bus.capacity));
+        setPassengerCount(Math.floor(Math.random() * busData.capacity));
         setLastUpdateTime(new Date());
-        toast.success(`Successfully tracking bus ${data.bus.busNumber}`);
+        toast.success(`Successfully tracking bus ${busData.busNumber}`);
   
         if (pushEnabled && !subscription) {
           registerPushNotifications();
@@ -324,16 +328,10 @@ const SearchBus = () => {
         toast.error(res.data.message || "Bus not found");
       }
     } catch (err) {
-      console.error("Fetch error details:", {
-        message: err.message,
-        response: err.response,
-        stack: err.stack
-      });
-      
+      console.error("Fetch error:", err);
       const errorMsg = err.response?.data?.message || 
                       err.message || 
                       "Error fetching bus details";
-      
       setError(errorMsg);
       toast.error(errorMsg);
     } finally {
@@ -398,51 +396,18 @@ const SearchBus = () => {
   const getDelayDuration = () => {
     if (!delayInfo?.timestamp) return { delayText: "N/A", startTime: "N/A" };
   
-    // Format the delay start time
-    const delayStartTime = new Date(delayInfo.timestamp).toLocaleString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: true
-    });
-  
-    // Calculate total delay duration if we have both estimated and scheduled times
-    let delayHours = 0;
-    let delayMins = 0;
+    const delayStart = new Date(delayInfo.timestamp);
+    const now = new Date();
+    const delayMs = now - delayStart;
     
-    if (stopETAs[nextStopIndex]?.arrivalTime && routePoints[nextStopIndex]?.time) {
-      try {
-        // Parse scheduled time (assuming format "HH:MM AM/PM")
-        const [timePart, period] = routePoints[nextStopIndex].time.split(' ');
-        let [hours, minutes] = timePart.split(':').map(Number);
-        
-        // Convert to 24-hour format
-        if (period === 'PM' && hours < 12) hours += 12;
-        if (period === 'AM' && hours === 12) hours = 0;
-        
-        // Create scheduled date object
-        const scheduledDate = new Date();
-        scheduledDate.setHours(hours, minutes, 0, 0);
-        
-        // Calculate total delay in minutes
-        const totalDelayMinutes = Math.round(
-          (stopETAs[nextStopIndex].arrivalTime - scheduledDate) / (1000 * 60)
-        );
-        
-        if (totalDelayMinutes > 0) {
-          delayHours = Math.floor(totalDelayMinutes / 60);
-          delayMins = totalDelayMinutes % 60;
-        }
-      } catch (e) {
-        console.error("Error calculating delay:", e);
-      }
-    }
-  
+    const delayHours = Math.floor(delayMs / (1000 * 60 * 60));
+    const delayMins = Math.floor((delayMs % (1000 * 60 * 60)) / (1000 * 60));
+    
     return {
       delayText: delayHours > 0 || delayMins > 0 
         ? `Delayed by ${delayHours}h ${delayMins}m` 
         : "On time",
-      startTime: delayStartTime
+      startTime: delayStart.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
   };
 
@@ -598,43 +563,29 @@ const SearchBus = () => {
   };
 
   const calculateRouteProgress = useCallback(() => {
-    if (!busLocation || routePoints.length === 0) return 0;
+    if (!busLocation || routePoints.length < 2) return 0;
     
-    let totalDistance = 0;
-    let traveledDistance = 0;
+    // Find the closest point on the route
+    let closestIndex = 0;
+    let minDistance = Infinity;
     
-    // Calculate total route distance
-    for (let i = 1; i < routePoints.length; i++) {
-      totalDistance += calculateDistance(
-        routePoints[i-1].latitude,
-        routePoints[i-1].longitude,
-        routePoints[i].latitude,
-        routePoints[i].longitude
-      );
-    }
-    
-    // Calculate distance traveled so far
-    for (let i = 1; i <= currentStopIndex; i++) {
-      traveledDistance += calculateDistance(
-        routePoints[i-1].latitude,
-        routePoints[i-1].longitude,
-        routePoints[i].latitude,
-        routePoints[i].longitude
-      );
-    }
-    
-    // Add distance from last stop to current location
-    if (currentStopIndex < routePoints.length - 1) {
-      traveledDistance += calculateDistance(
-        routePoints[currentStopIndex].latitude,
-        routePoints[currentStopIndex].longitude,
+    for (let i = 0; i < routePoints.length; i++) {
+      const distance = calculateDistance(
         busLocation.latitude,
-        busLocation.longitude
+        busLocation.longitude,
+        routePoints[i].latitude,
+        routePoints[i].longitude
       );
+      
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestIndex = i;
+      }
     }
     
-    return Math.min(100, Math.round((traveledDistance / totalDistance) * 100));
-  }, [busLocation, routePoints, currentStopIndex, calculateDistance]);
+    // Calculate progress based on closest point
+    return Math.round((closestIndex / (routePoints.length - 1)) * 100);
+  }, [busLocation, routePoints, calculateDistance]);
 
   const calculateETAs = useCallback(() => {
     if (!busLocation || !routePoints || routePoints.length === 0) return {};
@@ -766,9 +717,14 @@ const SearchBus = () => {
   
         const { routeId, currentLocation, delayInfo } = data.bus;
 
+        // Reverse stops if it's a return trip
+        const stops = data.bus.isReturnTrip 
+          ? [...(routeId.stops || [])].reverse() 
+          : routeId.stops || [];
+
         const points = [  
           { ...routeId.startLocation, type: 'start' },
-          ...(routeId.stops || []).map(stop => ({ ...stop, type: 'stop' })),
+          ...stops.map(stop => ({ ...stop, type: 'stop' })),
           { ...routeId.endLocation, type: 'end' }
         ];
         
@@ -776,7 +732,6 @@ const SearchBus = () => {
         setNextStopIndex(1);
         setDelayInfo(delayInfo || data.latestDelay);
 
-        // Show delay popup if bus is delayed
         if (delayInfo?.isDelayed) {
           setShowDelayPopup(true);
         }
@@ -787,7 +742,7 @@ const SearchBus = () => {
           capacity: data.bus.capacity,
           startLocation: routeId.startLocation,
           endLocation: routeId.endLocation,
-          stops: routeId.stops,
+          stops: stops,
           routeName: routeId.routeName,
           isReturnTrip: data.bus.isReturnTrip,
           status: data.bus.status,
@@ -800,7 +755,7 @@ const SearchBus = () => {
             latitude: currentLocation.latitude,
             longitude: currentLocation.longitude,
             speed: currentLocation.speed,
-            timestamp: currentLocation.timestamp
+            timestamp: new Date(currentLocation.timestamp).getTime()
           };
           
           if (busLocation) {
@@ -895,6 +850,9 @@ const SearchBus = () => {
     checkPushSupport();
     checkOnlineStatus();
 
+    window.addEventListener('online', checkOnlineStatus);
+    window.addEventListener('offline', checkOnlineStatus);
+
     return () => {
       clearInterval(refreshInterval);
       clearInterval(countdownInterval);
@@ -923,7 +881,6 @@ const SearchBus = () => {
     }
   }, [busLocation, routePoints, calculateETAs, calculateRouteProgress]);
 
-  // Add null check for stopsListRef
   useEffect(() => {
     if (stopsListRef.current && currentStopIndex > 0) {
       const stopElement = stopsListRef.current.children[currentStopIndex];
@@ -933,63 +890,81 @@ const SearchBus = () => {
     }
   }, [currentStopIndex, stopsListRef]);
 
+  useEffect(() => {
+    startAutoRefresh();
+  }, [autoRefresh, startAutoRefresh]);
+
   const renderRouteStops = () => {
     return (
       <div className="route-progress-container">
         <div className="route-progress-line"></div>
         <div className="route-stops-list" ref={stopsListRef}>
-          {routePoints.map((point, index) => (
-            <div 
-              key={index} 
-              className={`route-stop ${index === currentStopIndex ? 'current' : ''} ${index < currentStopIndex ? 'passed' : ''}`}
-            >
-              <div className="stop-marker">
-                {index === 0 && <CIcon icon={cilArrowCircleTop} className="text-success" />}
-                {index === routePoints.length - 1 && <CIcon icon={cilArrowCircleBottom} className="text-danger" />}
-                {index > 0 && index < routePoints.length - 1 && (
-                  <div className={`stop-dot ${index === currentStopIndex ? 'current-dot' : ''}`}></div>
-                )}
-              </div>
-              <div className="stop-details">
-                <div className="stop-name">
-                  <strong>{point.name}</strong>
-                  {index === currentStopIndex && (
-                    <CBadge color="success" className="ms-2">Current</CBadge>
+          {routePoints.map((point, index) => {
+            const isCurrent = index === currentStopIndex;
+            const isPassed = index < currentStopIndex;
+            const isNext = index === nextStopIndex;
+            
+            return (
+              <div 
+                key={index} 
+                className={`route-stop 
+                  ${isCurrent ? 'current' : ''} 
+                  ${isPassed ? 'passed' : ''}
+                  ${isNext ? 'next-stop' : ''}`}
+              >
+                <div className="stop-marker">
+                  {index === 0 && <CIcon icon={cilArrowCircleTop} className="text-success" />}
+                  {index === routePoints.length - 1 && <CIcon icon={cilArrowCircleBottom} className="text-danger" />}
+                  {index > 0 && index < routePoints.length - 1 && (
+                    <div className={`stop-dot ${isCurrent ? 'current-dot' : ''}`}></div>
                   )}
                 </div>
-                <div className="stop-time">
-                  {point.time && (
-                    <small>
-                      <strong>Scheduled: </strong>{point.time}
-                    </small>
-                  )}
-                  {stopETAs[index] && (
-                    <>
-                      {point.time && <br />}
+                <div className="stop-details">
+                  <div className="stop-name">
+                    <strong>{point.name}</strong>
+                    {isCurrent && (
+                      <CBadge color="success" className="ms-2">Current</CBadge>
+                    )}
+                  </div>
+                  <div className="stop-time">
+                    {point.time && (
                       <small>
-                        <strong>Estimated: </strong>
-                        {stopETAs[index].arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </small><br/>
-                      <small>
-                        <strong>reached in {stopETAs[index].minutes} min</strong>
+                        <strong>Scheduled: </strong>{point.time}
                       </small>
-                    </>
+                    )}
+                    {stopETAs[index] && (
+                      <>
+                        {point.time && <br />}
+                        <small>
+                          <strong>Estimated: </strong>
+                          {stopETAs[index].arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </small><br/>
+                        <small>
+                          <strong>reached in {stopETAs[index].minutes} min</strong>
+                        </small>
+                      </>
+                    )}
+                  </div>
+                  {stopETAs[index]?.distance && (
+                    <div className="stop-distance">
+                      <small>
+                        <strong>Distance: </strong>
+                        {stopETAs[index].distance} km
+                      </small>
+                    </div>
                   )}
                 </div>
-                {stopETAs[index]?.distance && (
-                  <div className="stop-distance">
-                    <small>
-                      <strong>Distance: </strong>
-                      {stopETAs[index].distance} km
-                    </small>
+                {isNext && stopETAs[index] && (
+                  <div className="next-stop-eta bg-info text-white p-1 rounded mt-1">
+                    <small>ETA: {stopETAs[index].minutes} min</small>
                   </div>
                 )}
+                {index < routePoints.length - 1 && (
+                  <div className="stop-connector"></div>
+                )}
               </div>
-              {index < routePoints.length - 1 && (
-                <div className="stop-connector"></div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
@@ -998,25 +973,28 @@ const SearchBus = () => {
   const renderDelayInfo = () => {
     if (!delayInfo?.isDelayed) return null;
   
-    const { delayText, startTime } = getDelayDuration();
+    const delayDuration = new Date() - new Date(delayInfo.timestamp);
+    const hours = Math.floor(delayDuration / (1000 * 60 * 60));
+    const minutes = Math.floor((delayDuration % (1000 * 60 * 60)) / (1000 * 60));
   
     return (
       <CRow className="mt-2">
         <CCol>
-          <CAlert color="warning" className="py-1 mb-0">
-            <div className="d-flex flex-column">
+          <CAlert color="warning" className="py-2 mb-0">
+            <div className="d-flex align-items-center">
+              <CIcon icon={cilWarning} className="me-2" size="xl" />
               <div>
-                <CIcon icon={cilWarning} className="me-2" />
-                <strong>Bus Delay: {delayText}</strong>
+                <h5 className="mb-1">Bus Delayed</h5>
+                <p className="mb-1">
+                  <strong>Duration:</strong> {hours > 0 ? `${hours}h ` : ''}{minutes}m
+                </p>
+                <p className="mb-1">
+                  <strong>Reason:</strong> {delayInfo.reason || 'Unknown'}
+                </p>
+                <p className="mb-0">
+                  <strong>Since:</strong> {new Date(delayInfo.timestamp).toLocaleTimeString()}
+                </p>
               </div>
-              <div className="mt-1">
-                <small>Delay Started: {startTime}</small>
-              </div>
-              {delayInfo.reason && (
-                <div className="mt-1">
-                  <small><strong>Reason:</strong> {delayInfo.reason}</small>
-                </div>
-              )}
             </div>
           </CAlert>
         </CCol>
@@ -1045,15 +1023,16 @@ const SearchBus = () => {
               <CCol md={4} className="border-end">
                 <div className="d-flex flex-column">
                   <div>
-                    <strong className="text-muted">Next Stop:</strong>
-                    {routePoints[nextStopIndex]?.name || 'Terminus'}
-                    {stopETAs[nextStopIndex] && (
-                      <strong className="text-muted">
-                        <br/>
-                        Arrival to nextstop: {formatTime(stopETAs[nextStopIndex].minutes)}
-                      </strong>
-                    )}
+                    <strong className="text-muted">Next Stop:</strong> {routePoints[nextStopIndex]?.name || 'Terminus'}
                   </div>
+                  <div className="mt-1">
+                    <strong className="text-muted">Distance:</strong> {distanceToNextStop.toFixed(2)} km
+                  </div>
+                  {stopETAs[nextStopIndex] && (
+                    <div>
+                      <strong className="text-muted">ETA:</strong> {formatTime(stopETAs[nextStopIndex].minutes)}
+                    </div>
+                  )}
                 </div>
               </CCol>
               <CCol md={4}>
@@ -1068,6 +1047,12 @@ const SearchBus = () => {
                     <strong className="text-muted">Last Update</strong>
                     <small>
                       {lastUpdateTime?.toLocaleTimeString() || 'N/A'}
+                    </small>
+                  </div>
+                  <div className="d-flex justify-content-between mt-1">
+                    <strong className="text-muted">Speed</strong>
+                    <small>
+                      {busLocation?.speed ? `${(busLocation.speed * 3.6).toFixed(1)} km/h` : '0 km/h'}
                     </small>
                   </div>
                 </div>
@@ -1176,8 +1161,10 @@ const SearchBus = () => {
   const renderDelayPopup = () => {
     if (!showDelayPopup || !delayInfo?.isDelayed) return null;
   
-    const { delayText, startTime } = getDelayDuration();
-  
+    const delayDuration = new Date() - new Date(delayInfo.timestamp);
+    const hours = Math.floor(delayDuration / (1000 * 60 * 60));
+    const minutes = Math.floor((delayDuration % (1000 * 60 * 60)) / (1000 * 60));
+
     return (
       <CModal 
         visible={showDelayPopup} 
@@ -1196,8 +1183,8 @@ const SearchBus = () => {
             <h5>Bus {busInfo?.busNumber} Delay Information</h5>
             <div className="delay-details">
               <p className="mb-1"><strong>Route:</strong> {busInfo?.routeName}</p>
-              <p className="mb-1"><strong>Status:</strong> {delayText || busInfo?.duration}</p>
-              <p className="mb-1"><strong>Delay Started:</strong> {startTime}</p>
+              <p className="mb-1"><strong>Status:</strong> Delayed for {hours > 0 ? `${hours}h ` : ''}{minutes}m</p>
+              <p className="mb-1"><strong>Delay Started:</strong> {new Date(delayInfo.timestamp).toLocaleTimeString()}</p>
               {delayInfo.reason && (
                 <p className="mb-1"><strong>Reason:</strong> {delayInfo.reason}</p>
               )}
@@ -1226,8 +1213,6 @@ const SearchBus = () => {
     );
   };
 
- 
-
   return (
     <div className="d-flex flex-column min-vh-100 bg-light">
       <Navbar />
@@ -1244,8 +1229,6 @@ const SearchBus = () => {
       
       {isOffline && renderOfflineStatus()}
       
-     
-
       <main className="flex-grow-1 py-4">
         <CContainer>
           {isLoading ? (
@@ -1337,7 +1320,7 @@ const SearchBus = () => {
                         isReturnTrip={busInfo.isReturnTrip}
                         offlineMode={isOffline}
                         userLocation={busLocation}
-                         userCoordinates={userCoordinates}
+                        userCoordinates={userCoordinates}
                         manualTracking={manualTracking}
                       />
                     </CCardBody>
@@ -1470,6 +1453,11 @@ const SearchBus = () => {
           border-left-color: #6c757d;
         }
         
+        .route-stop.next-stop .stop-details {
+          border-left-color: #17a2b8;
+          background-color: #e2f7fb;
+        }
+        
         .stop-connector {
           height: 15px;
           width: 2px;
@@ -1490,6 +1478,11 @@ const SearchBus = () => {
           font-size: 12px;
           color: #6c757d;
           margin-top: 4px;
+        }
+        
+        .next-stop-eta {
+          font-size: 0.75rem;
+          display: inline-block;
         }
         
         @keyframes pulse {

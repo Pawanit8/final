@@ -1,12 +1,6 @@
 import mongoose from "mongoose";
 
 const delayReportSchema = new mongoose.Schema({
-  // Add a TTL index to automatically remove documents after 1 day
-  createdAt: {
-    type: Date,
-    default: Date.now,
-    index: { expires: '1d' }
-  },
   bus: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Bus',

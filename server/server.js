@@ -8,8 +8,7 @@ import { createServer } from "http";
 import { Server } from "socket.io";
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { cleanupOldData } from "./utils/cleanup.js";
-import cron from 'node-cron';
+
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -70,14 +69,7 @@ io.on("connection", (socket) => {
   });
 });
 
-// Schedule daily cleanup at 12:00 AM
-const cleanupSchedule = '0 0 * * *'; // Every day at midnight
 
-cron.schedule(cleanupSchedule, async () => {
-  console.log('Starting daily cleanup...');
-  await cleanupOldData();
-  console.log('Daily cleanup completed');
-});
 
 // Start the server
 server.listen(port, () => {

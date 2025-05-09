@@ -143,22 +143,13 @@ const DriverDashboard = () => {
 
     // Check if bus has stopped moving
     if (busDetails.currentLocation.speed === 0 && timeSinceLastUpdate > 5) {
-      const delayInfo = {
+      return {
         isDelayed: true,
         delayMinutes: Math.round(timeSinceLastUpdate),
         reason: "Bus has stopped moving",
         nextStop: getNextStop(busDetails.routeId.stops)?.name || "Unknown",
         alreadyNotified: busDetails.delay?.isNotified || false
       };
-
-      // Automatically report delay if not already reported
-      if (!delayInfo.alreadyNotified) {
-        reportDelay().catch(error => {
-          console.error("Error auto-reporting delay:", error);
-        });
-      }
-
-      return delayInfo;
     }
 
     // Check each stop for delays
@@ -667,7 +658,6 @@ const DriverDashboard = () => {
     let totalDistance = 0;
     let traveledDistance = 0;
     
-    // Calculate total route distance
     for (let i = 1; i < routePoints.length; i++) {
       totalDistance += calculateDistance(
         routePoints[i-1].latitude,
@@ -676,22 +666,17 @@ const DriverDashboard = () => {
         routePoints[i].longitude
       );
     }
-
-    // Calculate distance traveled
-    if (currentStopIndex > 0) {
-      // Add distance between all passed stops
-      for (let i = 1; i <= currentStopIndex; i++) {
-        traveledDistance += calculateDistance(
-          routePoints[i-1].latitude,
-          routePoints[i-1].longitude,
-          routePoints[i].latitude,
-          routePoints[i].longitude
-        );
-      }
+    
+    for (let i = 1; i <= currentStopIndex; i++) {
+      traveledDistance += calculateDistance(
+        routePoints[i-1].latitude,
+        routePoints[i-1].longitude,
+        routePoints[i].latitude,
+        routePoints[i].longitude
+      );
     }
-
-    // Add distance from current stop to current location
-    if (currentStopIndex < routePoints.length) {
+    
+    if (currentStopIndex < routePoints.length - 1) {
       traveledDistance += calculateDistance(
         routePoints[currentStopIndex].latitude,
         routePoints[currentStopIndex].longitude,
@@ -699,10 +684,8 @@ const DriverDashboard = () => {
         location.longitude
       );
     }
-
-    // Calculate percentage
-    const percentage = (traveledDistance / totalDistance) * 100;
-    return Math.min(100, Math.max(0, Math.round(percentage)));
+    
+    return Math.min(100, Math.round((traveledDistance / totalDistance) * 100));
   };
 
   const handleRouteCompletion = () => {

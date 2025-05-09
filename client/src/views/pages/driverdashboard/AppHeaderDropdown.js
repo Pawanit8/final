@@ -121,7 +121,7 @@ const AppHeaderDropdown = () => {
           <CIcon icon={cilUser} className="me-2" />
           Profile
         </CDropdownItem>
-        <CDropdownItem as={Link} to="/settings">
+        <CDropdownItem >
           <CIcon icon={cilSettings} className="me-2" />
           Settings
         </CDropdownItem>
