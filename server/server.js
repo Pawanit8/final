@@ -19,7 +19,7 @@ const server = createServer(app);
 // Setup Socket.io with CORS
 const io = new Server(server, {
   cors: {
-    origin: ["https://final-year-project-frontend1.onrender.com","http://localhost:3000"],
+    origin: ["https://final-1-3j7z.onrender.com","http://localhost:3000"],
     methods: ["GET", "POST"],
     credentials: true,
   },
@@ -36,7 +36,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // CORS configuration
 const corsOptions = {
-  origin: ["https://final-year-project-frontend1.onrender.com","http://localhost:3000"],
+  origin: ["https://final-1-3j7z.onrender.com","http://localhost:3000"],
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"]
