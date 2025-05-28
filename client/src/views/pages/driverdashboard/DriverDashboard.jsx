@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import mapboxgl from "mapbox-gl";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
@@ -26,8 +26,7 @@ import {
   CModalTitle,
   CModalBody,
   CModalFooter,
-  CTooltip,
-  CToaster
+  CTooltip
 } from "@coreui/react";
 import { 
   cilLocationPin, 
@@ -35,7 +34,6 @@ import {
   cilArrowThickRight, 
   cilVolumeHigh, 
   cilVolumeOff, 
-  cilClock, 
   cilWarning,
   cilInfo,
   cilCheckCircle,
@@ -44,8 +42,7 @@ import {
   cilArrowCircleTop,
   cilReload,
   cilMap,
-  cilBell,
-  cilGas
+  cilBell
 } from '@coreui/icons';
 import CIcon from "@coreui/icons-react";
 import Navbar from "./Navbar";
@@ -59,42 +56,163 @@ const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY;
 mapboxgl.accessToken = MAPBOX_TOKEN;
 
-// Delay reasons for dropdown
-const DELAY_REASONS = [
-  { value: "Traffic congestion", label: "🚦 Traffic congestion" },
-  { value: "Road accident", label: "🚨 Road accident" },
-  { value: "Road construction", label: "🚧 Road construction" },
-  { value: "Vehicle breakdown", label: "🔧 Vehicle breakdown" },
-  { value: "Passenger delay", label: "👥 Passenger delay" },
-  { value: "Weather conditions", label: "⛈️ Weather conditions" },
-  { value: "Police activity", label: "👮 Police activity" },
-  { value: "Medical emergency", label: "🚑 Medical emergency" },
-  { value: "Mechanical issue", label: "⚙️ Mechanical issue" },
-  { value: "Driver change", label: "👤 Driver change" },
-  { value: "Schedule adjustment", label: "⏱️ Schedule adjustment" },
-  { value: "Other", label: "❔ Other (specify below)" }
-];
+// Graph class for Dijkstra's algorithm
+class Graph {
+  constructor() {
+    this.nodes = [];
+    this.adjacencyList = {};
+  }
 
-// Delay durations for dropdown
-const DELAY_DURATIONS = [5, 10, 15, 20, 30, 45, 60, 90, 120, 180];
+  addNode(node) {
+    this.nodes.push(node);
+    this.adjacencyList[node] = [];
+  }
 
-// Map styles
-const MAP_STYLES = [
-  { id: "streets-v11", name: "Streets" },
-  { id: "satellite-streets-v11", name: "Satellite" },
-  { id: "outdoors-v11", name: "Outdoors" },
-  { id: "light-v10", name: "Light" },
-  { id: "dark-v10", name: "Dark" }
-];
+  addEdge(node1, node2, weight) {
+    this.adjacencyList[node1].push({ node: node2, weight });
+    this.adjacencyList[node2].push({ node: node1, weight });
+  }
+
+  findShortestPath(startNode, endNode) {
+    const times = {};
+    const backtrace = {};
+    const pq = new PriorityQueue();
+
+    times[startNode] = 0;
+
+    this.nodes.forEach(node => {
+      if (node !== startNode) {
+        times[node] = Infinity;
+      }
+    });
+
+    pq.enqueue([startNode, 0]);
+
+    while (!pq.isEmpty()) {
+      const shortestStep = pq.dequeue();
+      const currentNode = shortestStep[0];
+
+      this.adjacencyList[currentNode].forEach(neighbor => {
+        const time = times[currentNode] + neighbor.weight;
+
+        if (time < times[neighbor.node]) {
+          times[neighbor.node] = time;
+          backtrace[neighbor.node] = currentNode;
+          pq.enqueue([neighbor.node, time]);
+        }
+      });
+    }
+
+    const path = [endNode];
+    let lastStep = endNode;
+
+    while (lastStep !== startNode) {
+      path.unshift(backtrace[lastStep]);
+      lastStep = backtrace[lastStep];
+    }
+
+    return {
+      path,
+      distance: times[endNode]
+    };
+  }
+}
+
+// Priority Queue implementation for Dijkstra's
+class PriorityQueue {
+  constructor() {
+    this.collection = [];
+  }
+
+  enqueue(element) {
+    if (this.isEmpty()) {
+      this.collection.push(element);
+    } else {
+      let added = false;
+      for (let i = 1; i <= this.collection.length; i++) {
+        if (element[1] < this.collection[i-1][1]) {
+          this.collection.splice(i-1, 0, element);
+          added = true;
+          break;
+        }
+      }
+      if (!added) {
+        this.collection.push(element);
+      }
+    }
+  }
+
+  dequeue() {
+    return this.collection.shift();
+  }
+
+  isEmpty() {
+    return this.collection.length === 0;
+  }
+}
+
+// Helper functions
+const convertTimeToMinutes = (timeString) => {
+  if (!timeString) return 0;
+  const [hours, minutes] = timeString.split(':').map(Number);
+  return hours * 60 + minutes;
+};
+
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+  const R = 6371; // Earth radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+};
+
+const formatTime = (minutes) => {
+  const hrs = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${hrs > 0 ? `${hrs}h ` : ''}${mins}m`;
+};
+
+const urlBase64ToUint8Array = (base64String) => {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding)
+    .replace(/-/g, '+')
+    .replace(/_/g, '/');
+
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+};
+
+// Throttle function to limit API calls
+const throttle = (func, limit) => {
+  let inThrottle;
+  return function() {
+    const args = arguments;
+    const context = this;
+    if (!inThrottle) {
+      func.apply(context, args);
+      inThrottle = true;
+      setTimeout(() => (inThrottle = false), limit);
+    }
+  }
+}
 
 const DriverDashboard = () => {
   // Navigation and Refs
   const navigate = useNavigate();
   const mapContainerRef = useRef(null);
   const stopsListRef = useRef(null);
-  const toasterRef = useRef(null);
+  const busMarkerRef = useRef(null); // Ref for bus marker
 
-  // Bus and Route State
+  // State declarations
   const [busDetails, setBusDetails] = useState(null);
   const [routePoints, setRoutePoints] = useState([]);
   const [isReturnTrip, setIsReturnTrip] = useState(false);
@@ -102,24 +220,17 @@ const DriverDashboard = () => {
   const [nextStopIndex, setNextStopIndex] = useState(1);
   const [stopETAs, setStopETAs] = useState({});
   const [routeProgress, setRouteProgress] = useState(0);
-  const [stopsWithTimestamps, setStopsWithTimestamps] = useState([]);
   const [locationHistory, setLocationHistory] = useState([]);
   const [delayedBuses, setDelayedBuses] = useState([]);
-
-  // Location Tracking State
+  const [isRouteOptimized, setIsRouteOptimized] = useState(false);
   const [location, setLocation] = useState(null);
   const [speed, setSpeed] = useState(0);
   const [sharingStopped, setSharingStopped] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const [locationAccuracy, setLocationAccuracy] = useState(null);
-
-  // Map State
   const [map, setMap] = useState(null);
-  const [busMarker, setBusMarker] = useState(null);
-  const [mapStyle, setMapStyle] = useState(MAP_STYLES[0].id);
+  const [mapStyle, setMapStyle] = useState("streets-v11");
   const [fuelStations, setFuelStations] = useState([]);
-
-  // UI State
   const [loading, setLoading] = useState(true);
   const [currentInstruction, setCurrentInstruction] = useState("");
   const [showToast, setShowToast] = useState(false);
@@ -134,45 +245,18 @@ const DriverDashboard = () => {
   const [showFuelStations, setShowFuelStations] = useState(false);
   const [isLoadingFuelStations, setIsLoadingFuelStations] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-
-  // Notification State
   const [isPushSupported, setIsPushSupported] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState("default");
 
-  // Refs for intervals and timeouts
+  // Refs
   const locationIntervalRef = useRef(null);
   const speechSynthesisRef = useRef(window.speechSynthesis);
   const pauseTimeoutRef = useRef(null);
 
-  // Helper Functions
+  // Helper functions
   const getNextStop = useCallback((stops) => stops?.find(stop => stop.actualArrivalTime === null), []);
 
-  const convertTimeToMinutes = useCallback((timeString) => {
-    if (!timeString) return 0;
-    const [hours, minutes] = timeString.split(':').map(Number);
-    return hours * 60 + minutes;
-  }, []);
-
-  const calculateDistance = useCallback((lat1, lon1, lat2, lon2) => {
-    const R = 6371; // Earth radius in km
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = 
-      Math.sin(dLat/2) * Math.sin(dLat/2) +
-      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-      Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c;
-  }, []);
-
-  const formatTime = useCallback((minutes) => {
-    const hrs = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return `${hrs > 0 ? `${hrs}h ` : ''}${mins}m`;
-  }, []);
-
-  // Calculate bus delay information
   const calculateBusDelay = useCallback(() => {
     if (!busDetails?.routeId?.stops || !busDetails.currentLocation) {
       return {
@@ -255,11 +339,11 @@ const DriverDashboard = () => {
       nextStop: getNextStop(busDetails.routeId.stops)?.name || "Unknown",
       alreadyNotified: false
     };
-  }, [busDetails, routePoints, stopETAs, convertTimeToMinutes, getNextStop]);
+  }, [busDetails, routePoints, stopETAs]);
 
   const delayInfo = calculateBusDelay();
 
-  // API Functions
+  // API functions
   const fetchBusDetails = useCallback(async () => {
     try {
       setLoading(true);
@@ -304,15 +388,14 @@ const DriverDashboard = () => {
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      setStopsWithTimestamps(prev => [
-        ...prev,
-        {
-          stopId: currentStop._id,
-          leaveTimestamp: now.toISOString()
-        }
-      ]);
-
-      toast.success(`Left ${currentStop.name} at ${now.toLocaleTimeString()}`);
+      setCurrentStopIndex(stopIndex);
+      
+      if (stopIndex === routePoints.length - 1) {
+        handleRouteCompletion();
+      } else {
+        setNextStopIndex(stopIndex + 1);
+        toast.info(`Arrived at ${currentStop.name}`);
+      }
     } catch (error) {
       console.error("Error updating leave timestamp:", error);
       toast.error("Failed to update departure time");
@@ -384,17 +467,6 @@ const DriverDashboard = () => {
 
       if (response.data.success) {
         toast.success("Delay reported successfully");
-        
-        await axios.post(
-          `${API_URL}/buses/${busDetails._id}/delay-notification`,
-          {
-            delayMinutes: delayDuration || delayInfo.delayMinutes,
-            reason: delayReason || delayInfo.reason,
-            nextStop: delayInfo.nextStop
-          },
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        
         setShowDelayModal(false);
         setDelayReason("");
         setDelayDuration(10);
@@ -433,7 +505,7 @@ const DriverDashboard = () => {
     }
   }, [busDetails, fetchBusDetails]);
 
-  // Map Functions
+  // Map functions
   const initializeMap = useCallback((points) => {
     if (!points || points.length === 0 || !mapContainerRef.current) return;
 
@@ -451,7 +523,6 @@ const DriverDashboard = () => {
       attributionControl: false
     });
 
-    // Add navigation control
     mapInstance.addControl(new mapboxgl.NavigationControl(), 'top-right');
 
     mapInstance.on("load", async () => {
@@ -465,12 +536,10 @@ const DriverDashboard = () => {
           .setPopup(new mapboxgl.Popup().setHTML(`
             <strong>${point.name}</strong>
             <p>${point.type.toUpperCase()} ${point.type === 'stop' ? index : ''}</p>
-            ${point.time ? `<p>Scheduled: ${point.time}</p>` : ''}
           `))
           .addTo(mapInstance);
       });
 
-      // Draw route line if we have multiple points
       if (points.length > 1) {
         try {
           const coordinates = points.map(point => [point.longitude, point.latitude]);
@@ -503,15 +572,70 @@ const DriverDashboard = () => {
         }
       }
 
+      // Reset bus marker when map is reinitialized
+      busMarkerRef.current = null;
+      
       setMap(mapInstance);
+      setRoutePoints(points);
     });
 
-    return () => {
-      if (mapInstance) {
-        mapInstance.remove();
+    return () => mapInstance?.remove();
+  }, [map, mapStyle, isReturnTrip]);
+
+  const optimizeRoute = useCallback((points) => {
+    const graph = new Graph();
+    
+    // Add all stops as nodes
+    points.forEach(point => {
+      graph.addNode(point._id);
+    });
+
+    // Add edges between all stops
+    for (let i = 0; i < points.length; i++) {
+      for (let j = i + 1; j < points.length; j++) {
+        const distance = calculateDistance(
+          points[i].latitude,
+          points[i].longitude,
+          points[j].latitude,
+          points[j].longitude
+        );
+        graph.addEdge(points[i]._id, points[j]._id, distance);
       }
-    };
-  }, [mapStyle, isReturnTrip]);
+    }
+
+    // Find shortest path
+    const startNode = points[0]._id;
+    const endNode = points[points.length - 1]._id;
+    const shortestPath = graph.findShortestPath(startNode, endNode);
+
+    // Reorder points
+    return shortestPath.path.map(nodeId => 
+      points.find(point => point._id === nodeId)
+    );
+  }, []);
+
+  const toggleRouteOptimization = useCallback(() => {
+    if (busDetails?.routeId) {
+      const routeData = busDetails.routeId;
+      let points = [
+        { ...routeData.startLocation, type: 'start' },
+        ...(routeData.stops || []).map(stop => ({ ...stop, type: 'stop' })),
+        { ...routeData.endLocation, type: 'end' }
+      ];
+      
+      if (isReturnTrip) {
+        points = [
+          { ...routeData.endLocation, type: 'start' },
+          ...(routeData.stops || []).map(stop => ({ ...stop, type: 'stop' })).reverse(),
+          { ...routeData.startLocation, type: 'end' }
+        ];
+      }
+      
+      const optimized = !isRouteOptimized;
+      initializeMap(optimized ? optimizeRoute(points) : points);
+      setIsRouteOptimized(optimized);
+    }
+  }, [busDetails, isReturnTrip, initializeMap, isRouteOptimized, optimizeRoute]);
 
   const updateNavigationPath = useCallback(async () => {
     if (!map || !location || nextStopIndex >= routePoints.length) return;
@@ -527,35 +651,33 @@ const DriverDashboard = () => {
       const currentLeg = routeData.legs[0];
       const currentStep = currentLeg.steps[0];
 
-      // Remove existing navigation route if it exists
+      // Update existing source instead of recreating
       if (map.getSource('navigation-route')) {
-        map.removeLayer('navigation-route-line');
-        map.removeSource('navigation-route');
-      }
-
-      // Add new navigation route
-      map.addSource('navigation-route', {
-        type: 'geojson',
-        data: {
+        map.getSource('navigation-route').setData({
           type: 'Feature',
           geometry: routeData.geometry
-        }
-      });
+        });
+      } else {
+        // Create only if doesn't exist
+        map.addSource('navigation-route', {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            geometry: routeData.geometry
+          }
+        });
 
-      map.addLayer({
-        id: 'navigation-route-line',
-        type: 'line',
-        source: 'navigation-route',
-        layout: {
-          'line-join': 'round',
-          'line-cap': 'round'
-        },
-        paint: {
-          'line-color': '#ff0000',
-          'line-width': 3,
-          'line-dasharray': [2, 2]
-        }
-      });
+        map.addLayer({
+          id: 'navigation-route-line',
+          type: 'line',
+          source: 'navigation-route',
+          paint: {
+            'line-color': '#ff0000',
+            'line-width': 3,
+            'line-dasharray': [2, 2]
+          }
+        });
+      }
 
       const instruction = currentStep.maneuver.instruction;
       setCurrentInstruction(instruction);
@@ -566,42 +688,39 @@ const DriverDashboard = () => {
         speakInstruction(instruction);
       }
 
-      // Check for potential delays
-      const delayInfo = calculateBusDelay();
-      if (delayInfo.isDelayed && delayInfo.delayMinutes > 5 && !delayInfo.alreadyNotified) {
-        toast.warning(`Potential delay detected: ${delayInfo.reason} (${formatTime(delayInfo.delayMinutes)})`);
-      }
-
     } catch (error) {
       console.error("Error updating navigation path:", error);
     }
-  }, [map, location, nextStopIndex, routePoints, voiceEnabled, calculateBusDelay, formatTime]);
+  }, [map, location, nextStopIndex, routePoints, voiceEnabled]);
 
-  // Location Functions
+  // Location functions
   const startLocationSharing = useCallback(() => {
     if (navigator.geolocation) {
+      // Throttled position handler
+      const throttledPositionUpdate = throttle(handlePositionUpdate, 10000); // 10 seconds
+      
       // Get initial position
       navigator.geolocation.getCurrentPosition(
-        handlePositionUpdate,
+        throttledPositionUpdate,
         handlePositionError,
         { enableHighAccuracy: true }
       );
       
-      // Set up interval for continuous updates
+      // Set up interval for updates
       locationIntervalRef.current = setInterval(() => {
         navigator.geolocation.getCurrentPosition(
-          handlePositionUpdate,
+          throttledPositionUpdate,
           handlePositionError,
           { enableHighAccuracy: true }
         );
-      }, isPaused ? 60000 : 30000); // Update every 30s (or 60s if paused)
+      }, 30000);
 
       setSharingStopped(false);
       toast.success("Location sharing started");
     } else {
-      toast.warning("Geolocation not supported by your browser");
+      toast.warning("Geolocation not supported");
     }
-  }, [isPaused]);
+  }, []);
 
   const stopLocationSharing = useCallback(() => {
     if (locationIntervalRef.current) {
@@ -614,7 +733,8 @@ const DriverDashboard = () => {
 
   const handlePositionUpdate = useCallback(async (position) => {
     const { latitude, longitude, speed: currentSpeed, accuracy } = position.coords;
-    setLocation({ latitude, longitude, timestamp: new Date().toISOString() });
+    const newLocation = { latitude, longitude, timestamp: new Date().toISOString() };
+    setLocation(newLocation);
     setSpeed(currentSpeed ? (currentSpeed * 3.6) : 0);
     setLocationAccuracy(accuracy);
 
@@ -634,16 +754,6 @@ const DriverDashboard = () => {
 
         if (distanceToStop < 0.1) { // 100 meters threshold
           await handleStopArrival(nextStopIndex);
-          setCurrentStopIndex(nextStopIndex);
-          
-          if (nextStopIndex === routePoints.length - 1) {
-            handleRouteCompletion();
-          } else {
-            setNextStopIndex(nextStopIndex + 1);
-            const arrivalMessage = `Arrived at ${nextStop.name}`;
-            toast.info(arrivalMessage);
-            if (voiceEnabled) speakInstruction(arrivalMessage);
-          }
         }
       }
 
@@ -651,8 +761,7 @@ const DriverDashboard = () => {
       await axios.post(
         `${API_URL}/update-location`,
         { 
-          latitude, 
-          longitude, 
+          ...newLocation, 
           speed: currentSpeed ? (currentSpeed * 3.6) : 0,
           busId: busDetails._id,
           isReturnTrip,
@@ -662,53 +771,38 @@ const DriverDashboard = () => {
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      // Check for delays and notify if necessary
-      const delayInfo = calculateBusDelay();
-      if (delayInfo.isDelayed && delayInfo.delayMinutes > 5 && !delayInfo.alreadyNotified) {
-        try {
-          await axios.post(
-            `${API_URL}/buses/${busDetails._id}/delay-notification`,
-            {
-              delayMinutes: delayInfo.delayMinutes,
-              reason: delayInfo.reason,
-              nextStop: delayInfo.nextStop
-            },
-            { headers: { Authorization: `Bearer ${token}` } }
-          );
-          toast.warning(`Delay notification sent to passengers`);
-        } catch (error) {
-          console.error("Error sending delay notification:", error);
-        }
-      }
-
-      // Update bus marker on map
+      // Update bus marker
       if (map) {
-        if (!busMarker) {
+        if (!busMarkerRef.current) {
           const markerEl = document.createElement("div");
           markerEl.innerHTML = "🚍";
           markerEl.style.fontSize = "24px";
-          markerEl.className = "bus-marker";
-
+          
+          // Apply animation styles directly
+          markerEl.style.animation = "pulse 2s infinite";
+          markerEl.style.transformOrigin = "center";
+          
           const newMarker = new mapboxgl.Marker({ element: markerEl })
             .setLngLat([longitude, latitude])
-            .setPopup(new mapboxgl.Popup().setHTML(`
-              <strong>Your Bus</strong>
-              <div>Speed: ${(currentSpeed * 3.6).toFixed(1)} km/h</div>
-              <div>Accuracy: ${Math.round(accuracy)} meters</div>
-            `))
             .addTo(map);
-          setBusMarker(newMarker);
+          
+          busMarkerRef.current = newMarker;
         } else {
-          busMarker.setLngLat([longitude, latitude]);
+          // Update existing marker position
+          busMarkerRef.current.setLngLat([longitude, latitude]);
+          
+          // Ensure animation is maintained
+          const markerEl = busMarkerRef.current.getElement();
+          if (!markerEl.style.animation) {
+            markerEl.style.animation = "pulse 2s infinite";
+          }
         }
 
-        // Smoothly move the map to follow the bus
+        // Move map to follow bus
         map.flyTo({
           center: [longitude, latitude],
           zoom: 14,
-          speed: 0.5,
-          curve: 1,
-          easing: (t) => t
+          speed: 0.5
         });
       }
 
@@ -716,7 +810,7 @@ const DriverDashboard = () => {
       console.error("Error sharing location:", error);
       toast.error("Failed to update location");
     }
-  }, [busDetails, busMarker, calculateBusDelay, calculateDistance, handleStopArrival, isReturnTrip, map, nextStopIndex, routePoints, voiceEnabled]);
+  }, [busDetails, handleStopArrival, isReturnTrip, map, nextStopIndex, routePoints]);
 
   const handlePositionError = useCallback((error) => {
     console.error("Geolocation error:", error);
@@ -724,27 +818,23 @@ const DriverDashboard = () => {
     
     switch(error.code) {
       case error.PERMISSION_DENIED:
-        errorMessage += "Location permission denied";
+        errorMessage += "Permission denied";
         break;
       case error.POSITION_UNAVAILABLE:
-        errorMessage += "Location information unavailable";
+        errorMessage += "Location unavailable";
         break;
       case error.TIMEOUT:
-        errorMessage += "Location request timed out";
+        errorMessage += "Request timed out";
         break;
       default:
         errorMessage += "Unknown error";
     }
     
     toast.error(errorMessage);
-    
-    // If we have a persistent error, stop sharing
-    if (locationIntervalRef.current) {
-      stopLocationSharing();
-    }
+    stopLocationSharing();
   }, [stopLocationSharing]);
 
-  // Other Functions
+  // Other functions
   const calculateETAs = useCallback(() => {
     if (!location || !routePoints || routePoints.length === 0) return {};
   
@@ -754,7 +844,7 @@ const DriverDashboard = () => {
     
     for (let i = nextStopIndex; i < routePoints.length; i++) {
       const prevPoint = i === nextStopIndex ? 
-        { latitude: location.latitude, longitude: location.longitude } : 
+        location : 
         routePoints[i - 1];
       
       const distance = calculateDistance(
@@ -764,7 +854,6 @@ const DriverDashboard = () => {
         routePoints[i].longitude
       );
       
-      // Use current speed if available, otherwise assume 30 km/h average
       const avgSpeed = speed > 0 ? speed : 30;
       const timeInHours = distance / avgSpeed;
       cumulativeTime += timeInHours * 60;
@@ -777,7 +866,7 @@ const DriverDashboard = () => {
     }
   
     return etas;
-  }, [location, routePoints, speed, nextStopIndex, calculateDistance]);
+  }, [location, routePoints, speed, nextStopIndex]);
 
   const calculateRouteProgress = useCallback(() => {
     if (!location || routePoints.length === 0) return 0;
@@ -785,7 +874,7 @@ const DriverDashboard = () => {
     let totalDistance = 0;
     let traveledDistance = 0;
     
-    // Calculate total route distance
+    // Calculate total distance
     for (let i = 1; i < routePoints.length; i++) {
       totalDistance += calculateDistance(
         routePoints[i-1].latitude,
@@ -795,7 +884,7 @@ const DriverDashboard = () => {
       );
     }
     
-    // Calculate distance traveled up to current stop
+    // Calculate distance traveled
     for (let i = 1; i <= currentStopIndex; i++) {
       traveledDistance += calculateDistance(
         routePoints[i-1].latitude,
@@ -805,7 +894,7 @@ const DriverDashboard = () => {
       );
     }
     
-    // Add distance from current stop to current location
+    // Add distance from current stop to location
     if (currentStopIndex < routePoints.length - 1) {
       traveledDistance += calculateDistance(
         routePoints[currentStopIndex].latitude,
@@ -816,39 +905,35 @@ const DriverDashboard = () => {
     }
     
     return Math.min(100, Math.round((traveledDistance / totalDistance) * 100));
-  }, [location, routePoints, currentStopIndex, calculateDistance]);
+  }, [location, routePoints, currentStopIndex]);
 
   const handleRouteCompletion = useCallback(() => {
-    if (isReturnTrip) {
-      const completionMessage = "Route completed! End of service.";
-      toast.info(completionMessage);
-      if (voiceEnabled) speakInstruction(completionMessage);
-      stopLocationSharing();
-    } else {
-      setIsPaused(true);
-      const pauseMessage = "Reached destination! Preparing return trip in 30 seconds...";
-      toast.info(pauseMessage);
-      if (voiceEnabled) speakInstruction(pauseMessage);
+    const completionMessage = isReturnTrip 
+      ? "Route completed! End of service." 
+      : "Reached destination! Preparing return trip...";
       
+    toast.info(completionMessage);
+    if (voiceEnabled) speakInstruction(completionMessage);
+    
+    if (!isReturnTrip) {
+      setIsPaused(true);
       pauseTimeoutRef.current = setTimeout(() => {
         setIsReturnTrip(true);
         setIsPaused(false);
-        const startMessage = "Starting return trip now!";
-        toast.info(startMessage);
-        if (voiceEnabled) speakInstruction(startMessage);
+        setNextStopIndex(1);
+        setCurrentStopIndex(0);
+        toast.info("Starting return trip now!");
       }, 30000);
+    } else {
+      stopLocationSharing();
     }
   }, [isReturnTrip, stopLocationSharing, voiceEnabled]);
 
   const speakInstruction = useCallback((text) => {
     if (speechSynthesisRef.current && voiceEnabled) {
-      // Cancel any ongoing speech
       speechSynthesisRef.current.cancel();
-      
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 0.9;
-      utterance.pitch = 1.2;
-      utterance.volume = 1;
       speechSynthesisRef.current.speak(utterance);
     }
   }, [voiceEnabled]);
@@ -856,25 +941,17 @@ const DriverDashboard = () => {
   const toggleVoiceAssistant = useCallback(() => {
     const newVoiceEnabled = !voiceEnabled;
     setVoiceEnabled(newVoiceEnabled);
-    
-    if (newVoiceEnabled && currentInstruction) {
-      speakInstruction(currentInstruction);
-    }
-    
     toast.info(`Voice assistant ${newVoiceEnabled ? 'enabled' : 'disabled'}`);
-  }, [voiceEnabled, currentInstruction, speakInstruction]);
+  }, [voiceEnabled]);
 
   const toggleMapStyle = useCallback(() => {
-    const currentIndex = MAP_STYLES.findIndex(style => style.id === mapStyle);
-    const nextIndex = (currentIndex + 1) % MAP_STYLES.length;
-    const newStyle = MAP_STYLES[nextIndex].id;
+    const styles = ["streets-v11", "satellite-streets-v11", "outdoors-v11", "light-v10", "dark-v10"];
+    const currentIndex = styles.indexOf(mapStyle);
+    const newStyle = styles[(currentIndex + 1) % styles.length];
     
     setMapStyle(newStyle);
-    if (map) {
-      map.setStyle(`mapbox://styles/mapbox/${newStyle}`);
-    }
-    
-    toast.info(`Map style changed to ${MAP_STYLES[nextIndex].name}`);
+    if (map) map.setStyle(`mapbox://styles/mapbox/${newStyle}`);
+    toast.info(`Map style changed to ${newStyle.replace('-v11', '').replace('-v10', '').toUpperCase()}`);
   }, [map, mapStyle]);
 
   const findNearbyFuelStations = useCallback(async () => {
@@ -887,7 +964,6 @@ const DriverDashboard = () => {
         return;
       }
 
-      // Try different search terms - "petrol pump" works better in India than "fuel"
       const response = await axios.get(
         `https://api.mapbox.com/geocoding/v5/mapbox.places/petrol%20pump.json`,
         {
@@ -895,45 +971,6 @@ const DriverDashboard = () => {
             proximity: `${location.longitude},${location.latitude}`,
             access_token: MAPBOX_TOKEN,
             limit: 10,
-            country: 'in',
-            types: 'poi',
-            radius: 10000 // 10km radius
-          }
-        }
-      );
-  
-      if (response.data.features.length === 0) {
-        toast.warning("No petrol pumps found nearby. Trying broader search...");
-        return await findFallbackFuelStations();
-      }
-  
-      const stations = response.data.features.map(feature => ({
-        id: feature.id,
-        name: feature.text || feature.properties.address || "Petrol Pump",
-        coordinates: feature.center,
-        address: feature.place_name
-      }));
-  
-      setFuelStations(stations);
-      addFuelStationsToMap(stations);
-      toast.success(`Found ${stations.length} nearby petrol pumps`);
-    } catch (error) {
-      console.error("Error finding petrol pumps:", error);
-      toast.error("Failed to find petrol pumps. Please try again later.");
-    } finally {
-      setIsLoadingFuelStations(false);
-    }
-  }, [location]);
-
-  const findFallbackFuelStations = useCallback(async () => {
-    try {
-      const response = await axios.get(
-        `https://api.mapbox.com/geocoding/v5/mapbox.places/petrol.json`,
-        {
-          params: {
-            proximity: `${location.longitude},${location.latitude}`,
-            access_token: MAPBOX_TOKEN,
-            limit: 5,
             country: 'in'
           }
         }
@@ -941,103 +978,25 @@ const DriverDashboard = () => {
   
       const stations = response.data.features.map(feature => ({
         id: feature.id,
-        name: feature.text || "Fuel Station",
+        name: feature.text || "Petrol Pump",
         coordinates: feature.center,
         address: feature.place_name
       }));
   
       setFuelStations(stations);
-      addFuelStationsToMap(stations);
-      toast.info(`Found ${stations.length} fuel stations nearby`);
+      toast.success(`Found ${stations.length} nearby petrol pumps`);
     } catch (error) {
-      console.error("Fallback search failed:", error);
-      toast.warning("Could not find fuel stations. Please check your internet connection.");
+      console.error("Error finding petrol pumps:", error);
+      toast.error("Failed to find petrol pumps");
+    } finally {
+      setIsLoadingFuelStations(false);
     }
   }, [location]);
 
-  const addFuelStationsToMap = useCallback((stations) => {
-    if (!map) return;
-
-    // Clear existing fuel stations
-    if (map.getLayer('fuel-stations')) {
-      map.removeLayer('fuel-stations');
-      map.removeSource('fuel-stations');
-    }
-
-    // Add new source and layer
-    map.addSource('fuel-stations', {
-      type: 'geojson',
-      data: {
-        type: 'FeatureCollection',
-        features: stations.map(station => ({
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            coordinates: station.coordinates
-          },
-          properties: {
-            title: station.name,
-            description: station.address,
-            id: station.id
-          }
-        }))
-      }
-    });
-
-    map.addLayer({
-      id: 'fuel-stations',
-      type: 'circle',
-      source: 'fuel-stations',
-      paint: {
-        'circle-radius': 8,
-        'circle-color': '#FFA500',
-        'circle-stroke-width': 2,
-        'circle-stroke-color': '#FFF'
-      }
-    });
-
-    // Add interactivity
-    map.on('click', 'fuel-stations', (e) => {
-      const coordinates = e.features[0].geometry.coordinates.slice();
-      const description = e.features[0].properties.description;
-
-      // Ensure the popup appears in the correct place
-      while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
-        coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
-      }
-
-      new mapboxgl.Popup()
-        .setLngLat(coordinates)
-        .setHTML(`
-          <h6>${e.features[0].properties.title}</h6>
-          <p>${description}</p>
-          <small>${calculateDistance(
-            location.latitude,
-            location.longitude,
-            coordinates[1],
-            coordinates[0]
-          ).toFixed(2)} km away</small>
-        `)
-        .addTo(map);
-    });
-
-    map.on('mouseenter', 'fuel-stations', () => {
-      map.getCanvas().style.cursor = 'pointer';
-    });
-
-    map.on('mouseleave', 'fuel-stations', () => {
-      map.getCanvas().style.cursor = '';
-    });
-  }, [map, location, calculateDistance]);
-
   const clearFuelStations = useCallback(() => {
-    if (map && map.getLayer('fuel-stations')) {
-      map.removeLayer('fuel-stations');
-      map.removeSource('fuel-stations');
-    }
     setFuelStations([]);
     setShowFuelStations(false);
-  }, [map]);
+  }, []);
 
   // Notification Functions
   const checkPushSupport = useCallback(async () => {
@@ -1061,23 +1020,18 @@ const DriverDashboard = () => {
       if (notificationPermission !== 'granted') {
         const permission = await Notification.requestPermission();
         setNotificationPermission(permission);
-        
-        if (permission !== 'granted') {
-          throw new Error('Permission not granted');
-        }
+        if (permission !== 'granted') return;
       }
       
       const registration = await navigator.serviceWorker.register('/sw.js');
-      
       const subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
       });
       
-      const userId = localStorage.getItem('userId') || busDetails?.driverId;
       await axios.post(`${API_URL}/subscribe`, { 
         subscription, 
-        userId 
+        userId: busDetails?.driverId 
       }, {
         headers: { Authorization: `Bearer ${localStorage.getItem("token")}` }
       });
@@ -1086,7 +1040,7 @@ const DriverDashboard = () => {
       toast.success('Push notifications enabled');
     } catch (error) {
       console.error('Push registration failed:', error);
-      toast.error('Failed to enable push notifications');
+      toast.error('Failed to enable notifications');
     }
   }, [notificationPermission, busDetails]);
 
@@ -1097,10 +1051,8 @@ const DriverDashboard = () => {
       
       if (subscription) {
         await subscription.unsubscribe();
-        
-        const userId = localStorage.getItem('userId') || busDetails?.driverId;
         await axios.post(`${API_URL}/unsubscribe`, { 
-          userId 
+          userId: busDetails?.driverId
         }, {
           headers: { Authorization: `Bearer ${localStorage.getItem("token")}` }
         });
@@ -1113,21 +1065,6 @@ const DriverDashboard = () => {
       toast.error("Failed to disable notifications");
     }
   }, [busDetails]);
-
-  const urlBase64ToUint8Array = (base64String) => {
-    const padding = '='.repeat((4 - base64String.length % 4) % 4);
-    const base64 = (base64String + padding)
-      .replace(/-/g, '+')
-      .replace(/_/g, '/');
-
-    const rawData = window.atob(base64);
-    const outputArray = new Uint8Array(rawData.length);
-
-    for (let i = 0; i < rawData.length; ++i) {
-      outputArray[i] = rawData.charCodeAt(i);
-    }
-    return outputArray;
-  };
 
   // Route Stops Component
   const renderRouteStops = useCallback(() => {
@@ -1173,18 +1110,7 @@ const DriverDashboard = () => {
                     </>
                   )}
                 </div>
-                {stopETAs[index]?.distance && (
-                  <div className="stop-distance">
-                    <small>
-                      <strong>Distance: </strong>
-                      {stopETAs[index].distance} km
-                    </small>
-                  </div>
-                )}
               </div>
-              {index < routePoints.length - 1 && (
-                <div className="stop-connector"></div>
-              )}
             </div>
           ))}
         </div>
@@ -1192,20 +1118,29 @@ const DriverDashboard = () => {
     );
   }, [routePoints, currentStopIndex, stopETAs, isReturnTrip]);
 
+  // Memoize expensive calculations
+  const memoizedStopETAs = useMemo(() => calculateETAs(), [calculateETAs]);
+  const memoizedRouteProgress = useMemo(() => calculateRouteProgress(), [calculateRouteProgress]);
+
+  useEffect(() => {
+    setStopETAs(memoizedStopETAs);
+    setRouteProgress(memoizedRouteProgress);
+  }, [memoizedStopETAs, memoizedRouteProgress]);
+
   // Effects
   useEffect(() => {
     fetchBusDetails();
     checkPushSupport();
     
     return () => {
-      if (locationIntervalRef.current) {
-        clearInterval(locationIntervalRef.current);
-      }
-      if (pauseTimeoutRef.current) {
-        clearTimeout(pauseTimeoutRef.current);
-      }
-      if (speechSynthesisRef.current) {
-        speechSynthesisRef.current.cancel();
+      clearInterval(locationIntervalRef.current);
+      clearTimeout(pauseTimeoutRef.current);
+      speechSynthesisRef.current?.cancel();
+      
+      // Clean up bus marker
+      if (busMarkerRef.current) {
+        busMarkerRef.current.remove();
+        busMarkerRef.current = null;
       }
     };
   }, [fetchBusDetails, checkPushSupport]);
@@ -1218,7 +1153,7 @@ const DriverDashboard = () => {
   }, [busDetails, fetchDelayedBuses, fetchLocationHistory]);
 
   useEffect(() => {
-    if (busDetails?.routeId) {
+    if (busDetails?.routeId && !map) {
       const routeData = busDetails.routeId;
       let points = [
         { ...routeData.startLocation, type: 'start' },
@@ -1237,38 +1172,22 @@ const DriverDashboard = () => {
       setRoutePoints(points);
       setNextStopIndex(1);
       setCurrentStopIndex(0);
-      
-      if (map) {
-        initializeMap(points);
-      }
+      initializeMap(points);
     }
   }, [busDetails, isReturnTrip, initializeMap, map]);
 
   useEffect(() => {
-    if (routePoints.length > 0 && !map) {
-      initializeMap(routePoints);
-    }
-  }, [routePoints, initializeMap, map]);
-
-  useEffect(() => {
-    if (location && map && routePoints.length > 0 && !isPaused) {
+    if (location && map && routePoints.length > 0) {
       updateNavigationPath();
     }
-  }, [location, map, routePoints, isPaused, updateNavigationPath]);
-
-  useEffect(() => {
-    if (location && routePoints.length > 0) {
-      setStopETAs(calculateETAs());
-      setRouteProgress(calculateRouteProgress());
-    }
-  }, [location, speed, routePoints, nextStopIndex, currentStopIndex, calculateETAs, calculateRouteProgress]);
+  }, [location, map, routePoints, updateNavigationPath]);
 
   useEffect(() => {
     if (stopsListRef.current && currentStopIndex > 0) {
-      const stopElement = stopsListRef.current.children[currentStopIndex];
-      if (stopElement) {
-        stopElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
+      stopsListRef.current.children[currentStopIndex]?.scrollIntoView({ 
+        behavior: 'smooth', 
+        block: 'center' 
+      });
     }
   }, [currentStopIndex]);
 
@@ -1276,7 +1195,6 @@ const DriverDashboard = () => {
     <>
       <Navbar />
       <ToastContainer position="top-right" autoClose={5000} />
-      <CToaster ref={toasterRef} push={toast} placement="top-right" />
       
       {loading ? (
         <div className="d-flex justify-content-center align-items-center" style={{ height: '80vh' }}>
@@ -1334,9 +1252,6 @@ const DriverDashboard = () => {
                           )}
                         </span>
                       </div>
-                      <div className="mb-2">
-                        <strong>Capacity:</strong> {busDetails.capacity} passengers
-                      </div>
                     </div>
 
                     {/* Delay Status */}
@@ -1387,14 +1302,6 @@ const DriverDashboard = () => {
                           {isReturnTrip ? "Return Trip" : "Outbound Trip"}
                         </CBadge>
                       </div>
-                      <div className="mb-2">
-                        <strong>Start:</strong> 
-                        {isReturnTrip ? busDetails.routeId?.endLocation?.name : busDetails.routeId?.startLocation?.name}
-                      </div>
-                      <div className="mb-2">
-                        <strong>Destination:</strong> 
-                        {isReturnTrip ? busDetails.routeId?.startLocation?.name : busDetails.routeId?.endLocation?.name}
-                      </div>
                     </div>
                     
                     {/* Route Progress */}
@@ -1425,14 +1332,7 @@ const DriverDashboard = () => {
                         className="w-100"
                         disabled={isLoadingFuelStations}
                       >
-                        {isLoadingFuelStations ? (
-                          <CSpinner size="sm" />
-                        ) : (
-                          <>
-                            <CIcon icon={cilGas} className="me-2" />
-                            Hide Fuel Stations
-                          </>
-                        )}
+                        Hide Fuel Stations
                       </CButton>
                     ) : (
                       <CButton 
@@ -1441,14 +1341,7 @@ const DriverDashboard = () => {
                         className="w-100"
                         disabled={isLoadingFuelStations}
                       >
-                        {isLoadingFuelStations ? (
-                          <CSpinner size="sm" />
-                        ) : (
-                          <>
-                            <CIcon icon={cilGas} className="me-2" />
-                            Find Fuel Stations
-                          </>
-                        )}
+                        Find Fuel Stations
                       </CButton>
                     )}
                   </CCol>
@@ -1475,6 +1368,30 @@ const DriverDashboard = () => {
                   </CCol>
                 </CRow>
                 
+                {/* Route Optimization */}
+                <CRow className="mb-3">
+                  <CCol>
+                    <CButton 
+                      color={isRouteOptimized ? "success" : "info"} 
+                      onClick={toggleRouteOptimization}
+                      className="w-100"
+                    >
+                      <CIcon icon={cilArrowThickRight} className="me-2" />
+                      {isRouteOptimized ? "Optimized Route" : "Optimize Route"}
+                    </CButton>
+                  </CCol>
+                  <CCol>
+                    <CButton 
+                      color={voiceEnabled ? "success" : "secondary"} 
+                      onClick={toggleVoiceAssistant}
+                      className="w-100"
+                    >
+                      <CIcon icon={voiceEnabled ? cilVolumeHigh : cilVolumeOff} className="me-2" />
+                      Voice {voiceEnabled ? "On" : "Off"}
+                    </CButton>
+                  </CCol>
+                </CRow>
+                
                 {/* Delay Controls */}
                 <CRow className="mb-3">
                   <CCol>
@@ -1497,29 +1414,6 @@ const DriverDashboard = () => {
                     >
                       <CIcon icon={cilCheckCircle} className="me-2" />
                       Resolve Delay
-                    </CButton>
-                  </CCol>
-                </CRow>
-                
-                {/* Additional Controls */}
-                <CRow>
-                  <CCol>
-                    <CButton 
-                      color="secondary" 
-                      onClick={() => setShowDelayedBuses(!showDelayedBuses)}
-                      className="w-100"
-                    >
-                      {showDelayedBuses ? "Hide Delays" : "Show Delays"}
-                    </CButton>
-                  </CCol>
-                  <CCol>
-                    <CButton 
-                      color={voiceEnabled ? "success" : "secondary"} 
-                      onClick={toggleVoiceAssistant}
-                      className="w-100"
-                    >
-                      <CIcon icon={voiceEnabled ? cilVolumeHigh : cilVolumeOff} className="me-2" />
-                      Voice {voiceEnabled ? "On" : "Off"}
                     </CButton>
                   </CCol>
                 </CRow>
@@ -1550,32 +1444,14 @@ const DriverDashboard = () => {
                     </div>
                     
                     {notificationPermission === "denied" && (
-                      <CAlert color="danger" className="d-flex align-items-center">
-                        <CIcon icon={cilWarning} className="flex-shrink-0 me-2" />
-                        <div>
-                          Notifications blocked. Please enable in browser settings.
-                        </div>
-                      </CAlert>
-                    )}
-                    
-                    {pushEnabled && (
-                      <CAlert color="info" className="d-flex align-items-center">
-                        <CIcon icon={cilInfo} className="flex-shrink-0 me-2" />
-                        <div>
-                          You'll receive notifications for:
-                          <ul className="mb-0 mt-2">
-                            <li>Bus delays and schedule changes</li>
-                            <li>Important route updates</li>
-                            <li>Emergency announcements</li>
-                          </ul>
-                        </div>
+                      <CAlert color="danger">
+                        Notifications blocked. Please enable in browser settings.
                       </CAlert>
                     )}
                   </>
                 ) : (
-                  <CAlert color="warning" className="d-flex align-items-center">
-                    <CIcon icon={cilWarning} className="flex-shrink-0 me-2" />
-                    <span>Push notifications not supported in your browser</span>
+                  <CAlert color="warning">
+                    Push notifications not supported in your browser
                   </CAlert>
                 )}
               </CCardBody>
@@ -1586,7 +1462,7 @@ const DriverDashboard = () => {
               <CCard className="mt-4 shadow-sm">
                 <CCardHeader>
                   <div className="d-flex justify-content-between align-items-center">
-                    <span>Delayed Buses in Your Route</span>
+                    <span>Delayed Buses</span>
                     <CBadge color="warning" shape="rounded-pill">
                       {delayedBuses.length}
                     </CBadge>
@@ -1602,7 +1478,6 @@ const DriverDashboard = () => {
                               <div>
                                 <strong>Bus {bus.busNumber}</strong>
                                 <div>{bus.reason}</div>
-                                <small>Next stop: {bus.nextStop}</small>
                               </div>
                               <CBadge color="danger">
                                 {formatTime(bus.duration)}
@@ -1612,7 +1487,7 @@ const DriverDashboard = () => {
                         ))}
                       </CListGroup>
                     ) : (
-                      <CAlert color="success">No delays reported in your route</CAlert>
+                      <CAlert color="success">No delays reported</CAlert>
                     )}
                   </div>
                 </CCardBody>
@@ -1669,7 +1544,7 @@ const DriverDashboard = () => {
                     className="me-2"
                   >
                     <CIcon icon={cilMap} className="me-2" />
-                    {MAP_STYLES.find(s => s.id === mapStyle)?.name}
+                    {mapStyle.replace('-v11', '').replace('-v10', '').toUpperCase()}
                   </CButton>
                   <CBadge color="primary">
                     {isReturnTrip ? "Return Trip" : "Outbound Trip"}
@@ -1756,25 +1631,14 @@ const DriverDashboard = () => {
                 required
               >
                 <option value="">Select a reason...</option>
-                {DELAY_REASONS.map((reason) => (
-                  <option key={reason.value} value={reason.value}>{reason.label}</option>
-                ))}
+                <option value="Traffic congestion">🚦 Traffic congestion</option>
+                <option value="Road accident">🚨 Road accident</option>
+                <option value="Road construction">🚧 Road construction</option>
+                <option value="Vehicle breakdown">🔧 Vehicle breakdown</option>
+                <option value="Passenger delay">👥 Passenger delay</option>
+                <option value="Weather conditions">⛈️ Weather conditions</option>
               </CFormSelect>
             </div>
-            
-            {delayReason === "Other" && (
-              <div className="mb-3">
-                <label htmlFor="customReason" className="form-label">Specify reason*</label>
-                <CFormInput
-                  type="text"
-                  id="customReason"
-                  value={delayNotes}
-                  onChange={(e) => setDelayNotes(e.target.value)}
-                  placeholder="Please specify the delay reason"
-                  required={delayReason === "Other"}
-                />
-              </div>
-            )}
             
             <div className="mb-3">
               <label htmlFor="delayDuration" className="form-label">Estimated delay duration*</label>
@@ -1784,9 +1648,13 @@ const DriverDashboard = () => {
                 onChange={(e) => setDelayDuration(Number(e.target.value))}
                 required
               >
-                {DELAY_DURATIONS.map((duration) => (
-                  <option key={duration} value={duration}>{duration} minutes</option>
-                ))}
+                <option value="5">5 minutes</option>
+                <option value="10">10 minutes</option>
+                <option value="15">15 minutes</option>
+                <option value="20">20 minutes</option>
+                <option value="30">30 minutes</option>
+                <option value="45">45 minutes</option>
+                <option value="60">60 minutes</option>
               </CFormSelect>
             </div>
           </CForm>
@@ -1798,7 +1666,7 @@ const DriverDashboard = () => {
           <CButton 
             color="primary" 
             onClick={reportDelay}
-            disabled={isReportingDelay || !delayReason || (delayReason === "Other" && !delayNotes)}
+            disabled={isReportingDelay || !delayReason}
           >
             {isReportingDelay ? (
               <>
@@ -1912,54 +1780,10 @@ const DriverDashboard = () => {
           border-left-color: #6c757d;
         }
         
-        .stop-connector {
-          height: 15px;
-          width: 2px;
-          background-color: #dee2e6;
-          margin-left: 4px;
-        }
-        
-        .route-stop:last-child .stop-connector {
-          display: none;
-        }
-        
-        .stop-name .badge {
-          font-size: 12px;
-        }
-        
-        .stop-distance {
-          font-size: 12px;
-          color: #6c757d;
-          margin-top: 4px;
-        }
-        
-        .bus-marker {
-          animation: pulse 2s infinite;
-        }
-        
         @keyframes pulse {
           0% { transform: scale(1); }
           50% { transform: scale(1.2); }
           100% { transform: scale(1); }
-        }
-        
-        /* Custom scrollbar for route stops */
-        .route-stops-list::-webkit-scrollbar {
-          width: 6px;
-        }
-        
-        .route-stops-list::-webkit-scrollbar-track {
-          background: #f1f1f1;
-          border-radius: 10px;
-        }
-        
-        .route-stops-list::-webkit-scrollbar-thumb {
-          background: #888;
-          border-radius: 10px;
-        }
-        
-        .route-stops-list::-webkit-scrollbar-thumb:hover {
-          background: #555;
         }
       `}</style>
     </>
